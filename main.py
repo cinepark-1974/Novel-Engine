@@ -761,3 +761,4 @@ with fc2:
         st.rerun()
 
 st.caption("© 2026 BLUE JEANS PICTURES · Novel Engine v1.1")
+

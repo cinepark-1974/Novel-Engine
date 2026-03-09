@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime
 from io import BytesIO
 from typing import Dict
 
@@ -14,6 +13,7 @@ from prompt import (
     build_intake_merge_prompt,
     build_rewrite_prompt,
     build_story_reinforcement_prompt,
+    build_title_review_prompt,
     build_unit_draft_prompt,
     build_unit_plan_prompt,
 )
@@ -21,6 +21,16 @@ from prompt import (
 APP_TITLE = "BLUE JEANS NOVEL ENGINE"
 ANTHROPIC_MODEL = "claude-sonnet-4-6"
 DEFAULT_STYLE = "시드니 셀던 스타일의 대중 장편소설 감각. 빠르게 읽히고, 장면이 선명하며, 챕터 말미 후킹이 강한 문체."
+GENRES = ["스릴러", "드라마", "느와르", "멜로/로맨스", "호러", "액션", "코미디", "SF/판타지", "역사", "첩보"]
+REWRITE_MODES = [
+    "더 상업적으로",
+    "더 빠르게",
+    "더 감정적으로",
+    "더 차갑게",
+    "더 스릴러답게",
+    "더 여성서사 중심으로",
+    "더 영상적으로",
+]
 
 st.set_page_config(
     page_title=APP_TITLE,
@@ -29,9 +39,6 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# ─────────────────────────────────────
-# State
-# ─────────────────────────────────────
 DEFAULT_STATE = {
     "title": "",
     "genre": "스릴러",
@@ -47,16 +54,13 @@ DEFAULT_STATE = {
     "unit_drafts": {},
     "selected_unit": 1,
     "rewrite_mode": "더 상업적으로",
+    "title_review": "",
 }
 
 for key, value in DEFAULT_STATE.items():
     if key not in st.session_state:
         st.session_state[key] = value
 
-
-# ─────────────────────────────────────
-# CSS
-# ─────────────────────────────────────
 st.markdown(
     """
 <style>
@@ -84,14 +88,12 @@ html, body, [class*="css"] {
     color: var(--t);
     -webkit-font-smoothing: antialiased;
 }
-
 .stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"],
 [data-testid="stMainBlockContainer"], [data-testid="stHeader"],
 [data-testid="stBottom"] {
     background-color: var(--bg) !important;
     color: var(--t) !important;
 }
-
 .stMarkdown, .stText, .stCode { color: var(--t) !important; }
 h1, h2, h3, h4, h5, h6 {
     color: var(--navy) !important;
@@ -110,39 +112,33 @@ section[data-testid="stSidebar"] { display: none; }
     font-size: 0.93rem !important;
     padding: 0.7rem 0.9rem !important;
 }
-
 .stTextInput input:focus, .stTextArea textarea:focus,
 [data-testid="stTextInput"] input:focus, [data-testid="stTextArea"] textarea:focus {
     border-color: var(--navy) !important;
     box-shadow: 0 0 0 2px rgba(32,42,120,0.08) !important;
 }
-
 .stTextInput input::placeholder, .stTextArea textarea::placeholder,
 [data-testid="stTextInput"] input::placeholder, [data-testid="stTextArea"] textarea::placeholder {
     color: var(--dim) !important;
     font-size: 0.86rem !important;
 }
-
 .stSelectbox > div > div, [data-baseweb="select"] > div, [data-baseweb="select"] input {
     background-color: var(--card) !important;
     color: var(--t) !important;
     border-color: var(--card-border) !important;
     border-radius: 8px !important;
 }
-
 [data-baseweb="popover"], [data-baseweb="menu"], [role="listbox"], [role="option"] {
     background-color: var(--card) !important;
     color: var(--t) !important;
 }
 [role="option"]:hover { background-color: var(--light-bg) !important; }
-
 .stTextInput label, .stTextArea label, .stSelectbox label {
     color: var(--t) !important;
     font-weight: 700 !important;
     font-size: 0.88rem !important;
     margin-bottom: 0.35rem !important;
 }
-
 .stButton > button {
     color: var(--t) !important;
     border: 1.5px solid var(--card-border) !important;
@@ -154,12 +150,10 @@ section[data-testid="stSidebar"] { display: none; }
     padding: 0.64rem 1.2rem !important;
     transition: all 0.2s;
 }
-
 .stButton > button:hover {
     border-color: var(--navy) !important;
     box-shadow: 0 2px 8px rgba(32,42,120,0.08) !important;
 }
-
 .stButton > button[kind="primary"],
 .stButton > button[data-testid="stBaseButton-primary"] {
     background-color: var(--y) !important;
@@ -167,13 +161,11 @@ section[data-testid="stSidebar"] { display: none; }
     border-color: var(--y) !important;
     font-weight: 900 !important;
 }
-
 .stButton > button[kind="primary"]:hover,
 .stButton > button[data-testid="stBaseButton-primary"]:hover {
     background-color: #E8B800 !important;
     box-shadow: 0 2px 12px rgba(255,203,5,0.30) !important;
 }
-
 .stDownloadButton > button {
     color: var(--navy) !important;
     border: 1.5px solid var(--y) !important;
@@ -184,21 +176,18 @@ section[data-testid="stSidebar"] { display: none; }
     font-size: 0.90rem !important;
     padding: 0.64rem 1.2rem !important;
 }
-
 .stExpander, details, details summary {
     background-color: var(--card) !important;
     color: var(--t) !important;
     border: 1px solid var(--card-border) !important;
     border-radius: 8px !important;
 }
-
 details[open] > div { background-color: var(--card) !important; }
 .stExpander summary, .stExpander summary span { color: var(--t) !important; }
 .stAlert { color: var(--t) !important; border-radius: 8px !important; }
 [data-testid="stVerticalBlock"], [data-testid="stHorizontalBlock"], [data-testid="stColumn"] {
     background-color: transparent !important;
 }
-
 .header {
     font-size: 0.85rem;
     font-weight: 700;
@@ -206,7 +195,6 @@ details[open] > div { background-color: var(--card) !important; }
     letter-spacing: 0.15em;
     font-family: var(--heading);
 }
-
 .brand-title {
     font-size: 2.6rem;
     font-weight: 900;
@@ -216,7 +204,6 @@ details[open] > div { background-color: var(--card) !important; }
     position: relative;
     display: inline-block;
 }
-
 .brand-title::after {
     content: '';
     position: absolute;
@@ -227,7 +214,6 @@ details[open] > div { background-color: var(--card) !important; }
     background: var(--y);
     border-radius: 2px;
 }
-
 .sub {
     font-size: 0.72rem;
     color: var(--dim);
@@ -235,7 +221,6 @@ details[open] > div { background-color: var(--card) !important; }
     margin-top: 0.5rem;
     margin-bottom: 1.5rem;
 }
-
 .callout {
     background: var(--light-bg);
     border-left: 4px solid var(--navy);
@@ -245,7 +230,6 @@ details[open] > div { background-color: var(--card) !important; }
     font-size: 0.90rem;
     color: var(--t);
 }
-
 .cl {
     color: var(--navy);
     font-weight: 800;
@@ -254,7 +238,6 @@ details[open] > div { background-color: var(--card) !important; }
     margin-bottom: 0.3rem;
     text-transform: uppercase;
 }
-
 .section-header {
     background: var(--y);
     color: var(--navy);
@@ -268,7 +251,6 @@ details[open] > div { background-color: var(--card) !important; }
     justify-content: space-between;
     align-items: center;
 }
-
 .section-header .en {
     font-family: var(--display);
     font-size: 0.78rem;
@@ -276,14 +258,12 @@ details[open] > div { background-color: var(--card) !important; }
     letter-spacing: 0.05em;
     opacity: 0.72;
 }
-
 .small-meta {
     font-size: 0.80rem;
     color: var(--dim);
     margin-top: -0.1rem;
     margin-bottom: 0.55rem;
 }
-
 .output-card {
     background: var(--card);
     border: 1px solid var(--card-border);
@@ -291,7 +271,6 @@ details[open] > div { background-color: var(--card) !important; }
     padding: 1rem 1.1rem;
     margin: 0.55rem 0 1rem 0;
 }
-
 .mini-guide {
     background: #ffffff;
     border: 1px solid var(--card-border);
@@ -299,7 +278,6 @@ details[open] > div { background-color: var(--card) !important; }
     padding: 0.85rem 1rem;
     margin: 0.25rem 0 1rem 0;
 }
-
 hr {
     border: none !important;
     border-top: 1px solid var(--card-border) !important;
@@ -311,9 +289,6 @@ hr {
 )
 
 
-# ─────────────────────────────────────
-# Helpers
-# ─────────────────────────────────────
 def get_client() -> Anthropic | None:
     api_key = st.secrets.get("ANTHROPIC_API_KEY", os.getenv("ANTHROPIC_API_KEY"))
     return Anthropic(api_key=api_key) if api_key else None
@@ -358,9 +333,7 @@ def previous_unit_summary(unit_no: int) -> str:
     if unit_no <= 1:
         return ""
     prev = st.session_state["unit_drafts"].get(unit_no - 1, "")
-    if not prev:
-        return ""
-    return prev[:2500]
+    return prev[:2500] if prev else ""
 
 
 def all_outputs_text() -> str:
@@ -376,13 +349,11 @@ def all_outputs_text() -> str:
 
     drafts: Dict[int, str] = st.session_state["unit_drafts"]
     for unit_no in sorted(drafts.keys()):
-        parts.append(
-            "=" * 70
-            + f"\nUnit {unit_no:02d} 원고\n"
-            + "=" * 70
-            + "\n\n"
-            + drafts[unit_no]
-        )
+        parts.append("=" * 70 + f"\nUnit {unit_no:02d} 원고\n" + "=" * 70 + "\n\n" + drafts[unit_no])
+
+    if st.session_state["title_review"]:
+        parts.append("=" * 70 + "\n제목 검토 / 제안\n" + "=" * 70 + "\n\n" + st.session_state["title_review"])
+
     return "\n\n\n".join(parts)
 
 
@@ -423,7 +394,7 @@ def make_docx_bytes(title: str, genre: str, body_text: str) -> bytes:
         if line.strip().startswith("="):
             continue
         if line.strip():
-            if line.startswith("Unit ") or line in {"통합 분석", "부족한 점 진단", "전체 줄거리 보강", "12 Unit 설계"}:
+            if line.startswith("Unit ") or line in {"통합 분석", "부족한 점 진단", "전체 줄거리 보강", "12 Unit 설계", "제목 검토 / 제안"}:
                 h = doc.add_heading(line.strip(), level=1)
                 for run in h.runs:
                     run.font.color.rgb = RGBColor(0x20, 0x2A, 0x78)
@@ -438,9 +409,14 @@ def make_docx_bytes(title: str, genre: str, body_text: str) -> bytes:
     return buf.getvalue()
 
 
-# ─────────────────────────────────────
-# Header
-# ─────────────────────────────────────
+def draft_excerpt_for_title(limit_chars: int = 12000) -> str:
+    drafts = st.session_state["unit_drafts"]
+    if not drafts:
+        return ""
+    merged = "\n\n".join([drafts[k] for k in sorted(drafts.keys())])
+    return merged[:limit_chars]
+
+
 st.markdown(
     '<div style="text-align:center;padding:1rem 0 0 0">'
     '<div class="header">B L U E &nbsp; J E A N S &nbsp; P I C T U R E S</div>'
@@ -452,16 +428,12 @@ st.markdown(
 
 st.markdown(
     '<div class="callout"><div class="cl">HOW TO USE</div>'
-    '기획서를 아무도 모를 용어로 자르지 않습니다. 아래 4칸은 의미가 분명합니다. '
+    '입력 용어를 모호하게 쓰지 않습니다. 아래 4칸은 의미가 분명합니다. '
     '① 작품 개요 ② 캐릭터 ③ 줄거리/트리트먼트 ④ 추가 메모. '
-    '네 칸을 다 채울 필요는 없고, 보통 1~3번만으로도 작동합니다.</div>',
+    '보통 1~3번만으로도 작동합니다.</div>',
     unsafe_allow_html=True,
 )
 
-
-# ─────────────────────────────────────
-# STEP 1
-# ─────────────────────────────────────
 st.markdown(
     '<div class="section-header">STEP 1 · 기획서 입력 <span class="en">CLEAR INPUT ONLY</span></div>',
     unsafe_allow_html=True,
@@ -470,16 +442,13 @@ st.markdown(
 meta_col1, meta_col2 = st.columns([1.4, 1])
 with meta_col1:
     st.session_state["title"] = st.text_input(
-        "작품 제목",
+        "현재 가제",
         value=st.session_state["title"],
         placeholder="예: 머지 앤 어퀴지션",
     )
 with meta_col2:
-    st.session_state["genre"] = st.selectbox(
-        "장르",
-        ["스릴러", "드라마", "느와르", "멜로/로맨스", "호러", "액션", "코미디", "SF/판타지"],
-        index=["스릴러", "드라마", "느와르", "멜로/로맨스", "호러", "액션", "코미디", "SF/판타지"].index(st.session_state["genre"]),
-    )
+    current_genre_index = GENRES.index(st.session_state["genre"]) if st.session_state["genre"] in GENRES else 0
+    st.session_state["genre"] = st.selectbox("장르", GENRES, index=current_genre_index)
 
 st.session_state["style_note"] = st.text_input(
     "문체 지향",
@@ -490,10 +459,10 @@ st.session_state["style_note"] = st.text_input(
 with st.expander("입력칸 설명 보기", expanded=False):
     st.markdown(
         """
-- **작품 개요**: 로그라인, 기획의도, 장르, 톤, 세계관, 차별점
-- **캐릭터**: 주인공, 적대자, 조력자, 관계, 욕망, 결핍, 비밀
+- **작품 개요**: 로그라인, 기획의도, 세계관, 장르 톤, 차별점
+- **캐릭터**: 주인공, 적대자, 조력자, 관계 구조, 욕망, 결핍, 비밀
 - **줄거리 / 트리트먼트**: 시작, 중반, 위기, 클라이맥스, 엔딩 방향
-- **추가 메모**: 꼭 살릴 장면, 약한 부분, 참고 작품, 조사 메모
+- **추가 메모**: 꼭 살릴 장면, 약한 부분, 참고 문체, 조사 메모
         """
     )
 
@@ -522,184 +491,111 @@ with col2:
         "추가 메모 (선택)",
         value=st.session_state["extra_notes"],
         height=230,
-        placeholder="꼭 살릴 장면, 약한 부분, 참고 문체, 조사 자료, 산업 디테일",
+        placeholder="꼭 살릴 장면 / 약한 부분 / 참고 문체 / 조사 메모",
     )
 
-
-# ─────────────────────────────────────
-# STEP 2
-# ─────────────────────────────────────
 st.markdown(
-    '<div class="section-header">STEP 2 · 분석과 설계 <span class="en">ONE CLICK</span></div>',
+    '<div class="section-header">STEP 2 · 분석과 보강 <span class="en">SEQUENTIAL FLOW</span></div>',
     unsafe_allow_html=True,
 )
 
-st.markdown(
-    '<div class="small-meta">프로그램이 자동으로 통합 분석 → 부족한 점 진단 → 전체 줄거리 보강 → 12 Unit 설계를 순서대로 진행합니다.</div>',
-    unsafe_allow_html=True,
-)
-
-btn_c1, btn_c2, btn_c3, btn_c4 = st.columns(4)
-
-with btn_c1:
-    if st.button("기획서 통합 분석", type="primary", use_container_width=True):
+b1, b2, b3, b4 = st.columns(4)
+with b1:
+    if st.button("기획서 통합 분석", use_container_width=True, type="primary"):
         prompt_text = build_intake_merge_prompt(
-            title=st.session_state["title"],
-            genre=st.session_state["genre"],
-            style_note=st.session_state["style_note"],
-            chunks=chunks(),
+            st.session_state["title"],
+            st.session_state["genre"],
+            st.session_state["style_note"],
+            chunks(),
         )
-        generate_to_state("merged_summary", prompt_text, "기획서를 하나의 통합 요약으로 분석 중…", tokens=7000)
-
-with btn_c2:
-    if st.button("부족한 점 진단", use_container_width=True, disabled=not st.session_state["merged_summary"]):
+        generate_to_state("merged_summary", prompt_text, "기획서 통합 분석 생성 중", tokens=7000)
+with b2:
+    if st.button(
+        "부족한 점 진단",
+        use_container_width=True,
+        disabled=not st.session_state["merged_summary"],
+    ):
         prompt_text = build_gap_diagnosis_prompt(
-            title=st.session_state["title"],
-            genre=st.session_state["genre"],
-            merged_summary=st.session_state["merged_summary"],
+            st.session_state["title"],
+            st.session_state["genre"],
+            st.session_state["merged_summary"],
         )
-        generate_to_state("gap_report", prompt_text, "장편화에 부족한 점을 진단 중…", tokens=7000)
-
-with btn_c3:
+        generate_to_state("gap_report", prompt_text, "부족한 점 진단 생성 중", tokens=7000)
+with b3:
     if st.button(
         "전체 줄거리 보강",
         use_container_width=True,
-        disabled=not (st.session_state["merged_summary"] and st.session_state["gap_report"]),
+        disabled=not st.session_state["gap_report"],
     ):
         prompt_text = build_story_reinforcement_prompt(
-            title=st.session_state["title"],
-            genre=st.session_state["genre"],
-            merged_summary=st.session_state["merged_summary"],
-            gap_report=st.session_state["gap_report"],
+            st.session_state["title"],
+            st.session_state["genre"],
+            st.session_state["merged_summary"],
+            st.session_state["gap_report"],
         )
-        generate_to_state("reinforced_story", prompt_text, "장편소설용 전체 줄거리를 보강 중…", tokens=8000)
-
-with btn_c4:
+        generate_to_state("reinforced_story", prompt_text, "전체 줄거리 보강 생성 중", tokens=8000)
+with b4:
     if st.button(
         "12 Unit 설계",
         use_container_width=True,
         disabled=not st.session_state["reinforced_story"],
     ):
         prompt_text = build_unit_plan_prompt(
-            title=st.session_state["title"],
-            genre=st.session_state["genre"],
-            reinforced_story=st.session_state["reinforced_story"],
+            st.session_state["title"],
+            st.session_state["genre"],
+            st.session_state["reinforced_story"],
         )
-        generate_to_state("unit_plan", prompt_text, "12 Unit 구조를 설계 중…", tokens=9000)
+        generate_to_state("unit_plan", prompt_text, "12 Unit 설계 생성 중", tokens=9000)
 
-if st.session_state["merged_summary"]:
-    st.markdown('<div class="output-card">', unsafe_allow_html=True)
-    st.subheader("통합 분석")
-    st.markdown(st.session_state["merged_summary"])
-    st.markdown('</div>', unsafe_allow_html=True)
+for heading, state_key in [
+    ("통합 분석", "merged_summary"),
+    ("부족한 점 진단", "gap_report"),
+    ("전체 줄거리 보강", "reinforced_story"),
+    ("12 Unit 설계", "unit_plan"),
+]:
+    if st.session_state[state_key]:
+        st.markdown(f'<div class="small-meta">{heading}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="output-card">{st.session_state[state_key].replace(chr(10), "<br>")}</div>', unsafe_allow_html=True)
 
-if st.session_state["gap_report"]:
-    st.markdown('<div class="output-card">', unsafe_allow_html=True)
-    st.subheader("부족한 점 진단")
-    st.markdown(st.session_state["gap_report"])
-    st.markdown('</div>', unsafe_allow_html=True)
-
-if st.session_state["reinforced_story"]:
-    st.markdown('<div class="output-card">', unsafe_allow_html=True)
-    st.subheader("전체 줄거리 보강")
-    st.markdown(st.session_state["reinforced_story"])
-    st.markdown('</div>', unsafe_allow_html=True)
-
-if st.session_state["unit_plan"]:
-    st.markdown('<div class="output-card">', unsafe_allow_html=True)
-    st.subheader("12 Unit 설계")
-    st.markdown(st.session_state["unit_plan"])
-    st.markdown('</div>', unsafe_allow_html=True)
-
-
-# ─────────────────────────────────────
-# STEP 3
-# ─────────────────────────────────────
 st.markdown(
-    '<div class="section-header">STEP 3 · Unit 원고 작성 <span class="en">WRITE UNIT BY UNIT</span></div>',
+    '<div class="section-header">STEP 3 · Unit 원고 생성 / 다시 쓰기 <span class="en">DRAFT & REWRITE</span></div>',
     unsafe_allow_html=True,
 )
 
-u1, u2, u3 = st.columns([1, 1, 1.2])
-with u1:
-    st.session_state["selected_unit"] = st.selectbox(
-        "작성할 Unit 번호",
-        list(range(1, 13)),
-        index=int(st.session_state["selected_unit"]) - 1,
-    )
-with u2:
-    st.session_state["rewrite_mode"] = st.selectbox(
-        "리라이트 방향",
-        [
-            "더 상업적으로",
-            "더 빠르게",
-            "더 감정적으로",
-            "더 차갑게",
-            "더 스릴러답게",
-            "더 여성서사 중심으로",
-            "더 영상적으로",
-        ],
-        index=[
-            "더 상업적으로",
-            "더 빠르게",
-            "더 감정적으로",
-            "더 차갑게",
-            "더 스릴러답게",
-            "더 여성서사 중심으로",
-            "더 영상적으로",
-        ].index(st.session_state["rewrite_mode"]),
-    )
-with u3:
-    st.markdown(
-        '<div class="mini-guide"><strong>Unit 작성 원칙</strong><br>한 번에 장편 전체를 쓰지 않고, Unit 단위로 작성합니다. 먼저 Unit 01부터 시작한 뒤 순서대로 진행하는 방식이 가장 안정적입니다.</div>',
-        unsafe_allow_html=True,
-    )
+unit_col1, unit_col2, unit_col3 = st.columns([0.9, 1.3, 1.3])
+with unit_col1:
+    st.session_state["selected_unit"] = st.number_input("작업할 Unit 번호", min_value=1, max_value=12, step=1, value=int(st.session_state["selected_unit"]))
+with unit_col2:
+    st.session_state["rewrite_mode"] = st.selectbox("리라이트 방향", REWRITE_MODES, index=REWRITE_MODES.index(st.session_state["rewrite_mode"]))
+with unit_col3:
+    st.markdown('<div class="mini-guide">현재 구조는 순서형입니다. 12 Unit 설계가 끝난 뒤 Unit 원고를 생성합니다.</div>', unsafe_allow_html=True)
 
-unit_btn1, unit_btn2 = st.columns(2)
-with unit_btn1:
-    if st.button(
-        f"Unit {st.session_state['selected_unit']:02d} 원고 생성",
-        type="primary",
-        use_container_width=True,
-        disabled=not st.session_state["unit_plan"],
-    ):
+u1, u2 = st.columns(2)
+with u1:
+    if st.button("선택 Unit 원고 생성", use_container_width=True, type="primary", disabled=not st.session_state["unit_plan"]):
         unit_no = int(st.session_state["selected_unit"])
         prompt_text = build_unit_draft_prompt(
-            title=st.session_state["title"],
-            genre=st.session_state["genre"],
-            style_note=st.session_state["style_note"],
-            reinforced_story=st.session_state["reinforced_story"],
-            unit_plan=st.session_state["unit_plan"],
-            unit_number=unit_no,
-            previous_unit_summary=previous_unit_summary(unit_no),
+            st.session_state["title"],
+            st.session_state["genre"],
+            st.session_state["style_note"],
+            st.session_state["reinforced_story"],
+            st.session_state["unit_plan"],
+            unit_no,
+            previous_unit_summary(unit_no),
         )
-        st.markdown(
-            f'<div class="callout"><div class="cl">WRITING</div>Unit {unit_no:02d} 원고를 작성 중…</div>',
-            unsafe_allow_html=True,
-        )
-        result = st.write_stream(stream_ai(prompt_text, tokens=9000))
+        st.markdown(f'<div class="callout"><div class="cl">RUNNING</div>Unit {unit_no:02d} 원고 생성 중</div>', unsafe_allow_html=True)
+        result = st.write_stream(stream_ai(prompt_text, tokens=10000))
         drafts = dict(st.session_state["unit_drafts"])
         drafts[unit_no] = result or ""
         st.session_state["unit_drafts"] = drafts
         st.rerun()
-
-with unit_btn2:
+with u2:
     selected_text = st.session_state["unit_drafts"].get(int(st.session_state["selected_unit"]), "")
-    if st.button(
-        f"Unit {st.session_state['selected_unit']:02d} 다시 쓰기",
-        use_container_width=True,
-        disabled=not bool(selected_text),
-    ):
+    if st.button("선택 Unit 다시 쓰기", use_container_width=True, disabled=not selected_text):
         unit_no = int(st.session_state["selected_unit"])
-        prompt_text = build_rewrite_prompt(
-            mode=st.session_state["rewrite_mode"],
-            text=st.session_state["unit_drafts"].get(unit_no, ""),
-        )
-        st.markdown(
-            f'<div class="callout"><div class="cl">REWRITE</div>Unit {unit_no:02d} 원고를 다시 쓰는 중…</div>',
-            unsafe_allow_html=True,
-        )
-        result = st.write_stream(stream_ai(prompt_text, tokens=9000))
+        prompt_text = build_rewrite_prompt(st.session_state["rewrite_mode"], selected_text)
+        st.markdown(f'<div class="callout"><div class="cl">RUNNING</div>Unit {unit_no:02d} 다시 쓰기 진행 중</div>', unsafe_allow_html=True)
+        result = st.write_stream(stream_ai(prompt_text, tokens=10000))
         drafts = dict(st.session_state["unit_drafts"])
         drafts[unit_no] = result or ""
         st.session_state["unit_drafts"] = drafts
@@ -710,55 +606,56 @@ if st.session_state["unit_drafts"]:
         with st.expander(f"Unit {unit_no:02d} 원고 보기", expanded=(unit_no == int(st.session_state["selected_unit"]))):
             st.markdown(st.session_state["unit_drafts"][unit_no])
 
-
-# ─────────────────────────────────────
-# STEP 4
-# ─────────────────────────────────────
 st.markdown(
-    '<div class="section-header">STEP 4 · 저장 <span class="en">DOWNLOAD</span></div>',
+    '<div class="section-header">STEP 4 · 저장하기 <span class="en">EXPORT</span></div>',
     unsafe_allow_html=True,
 )
 
-compiled_text = all_outputs_text()
-if compiled_text.strip():
-    ts = datetime.now().strftime("%Y%m%d_%H%M")
-    filename_base = (st.session_state["title"] or "novel_project").replace(" ", "_")
+export_text = all_outputs_text()
+file_stem = (st.session_state["title"] or "novel_project").strip().replace(" ", "_")
 
-    dl1, dl2 = st.columns(2)
-    with dl1:
-        st.download_button(
-            label="TXT 저장",
-            data=compiled_text,
-            file_name=f"{filename_base}_{ts}.txt",
-            mime="text/plain",
-            use_container_width=True,
-        )
-    with dl2:
-        try:
-            docx_bytes = make_docx_bytes(st.session_state["title"], st.session_state["genre"], compiled_text)
-            st.download_button(
-                label="DOCX 저장",
-                data=docx_bytes,
-                file_name=f"{filename_base}_{ts}.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                use_container_width=True,
-            )
-        except ImportError:
-            st.caption("DOCX 저장을 위해 python-docx 설치가 필요합니다.")
-else:
-    st.caption("아직 저장할 결과가 없습니다. 먼저 분석 또는 Unit 원고를 생성해 주세요.")
+save_col1, save_col2 = st.columns(2)
+with save_col1:
+    st.download_button(
+        "TXT 저장",
+        data=export_text.encode("utf-8"),
+        file_name=f"{file_stem}.txt",
+        mime="text/plain",
+        use_container_width=True,
+        disabled=not export_text,
+    )
+with save_col2:
+    st.download_button(
+        "DOCX 저장",
+        data=make_docx_bytes(st.session_state["title"], st.session_state["genre"], export_text),
+        file_name=f"{file_stem}.docx",
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        use_container_width=True,
+        disabled=not export_text,
+    )
 
+st.markdown(
+    '<div class="section-header">STEP 5 · 제목 검토 / 제안 <span class="en">TITLE REVIEW AFTER DRAFT</span></div>',
+    unsafe_allow_html=True,
+)
 
-# ─────────────────────────────────────
-# Footer
-# ─────────────────────────────────────
-st.markdown("---")
-fc1, fc2 = st.columns([3, 1])
-with fc2:
-    if st.button("전체 초기화", use_container_width=True):
-        for key in list(st.session_state.keys()):
-            del st.session_state[key]
-        st.rerun()
+st.markdown(
+    '<div class="callout"><div class="cl">TITLE LOGIC</div>'
+    '이 단계는 현재 가제를 버리는 기능이 아니라, 원고와 반복 대사, 상징어, 마지막 정서를 다시 읽고 '
+    '가제를 유지할지, 더 강한 대안을 붙일지 검토하는 단계입니다.</div>',
+    unsafe_allow_html=True,
+)
 
-st.caption("© 2026 BLUE JEANS PICTURES · Novel Engine v1.1")
+if st.button("원고 기반 제목 검토 / 제안", use_container_width=True, type="primary", disabled=not st.session_state["unit_drafts"]):
+    prompt_text = build_title_review_prompt(
+        st.session_state["title"],
+        st.session_state["genre"],
+        st.session_state["merged_summary"],
+        st.session_state["reinforced_story"],
+        st.session_state["unit_plan"],
+        draft_excerpt_for_title(),
+    )
+    generate_to_state("title_review", prompt_text, "제목 검토 / 제안 생성 중", tokens=7000)
 
+if st.session_state["title_review"]:
+    st.markdown(f'<div class="output-card">{st.session_state["title_review"].replace(chr(10), "<br>")}</div>', unsafe_allow_html=True)

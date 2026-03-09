@@ -102,7 +102,6 @@ STYLE_APPLICATION_NOTE = dedent(
 ).strip()
 
 
-
 def build_intake_merge_prompt(title: str, genre: str, style_note: str, chunks: list[str]) -> str:
     overview = clean(chunks[0] if len(chunks) > 0 else "")
     characters = clean(chunks[1] if len(chunks) > 1 else "")
@@ -110,9 +109,9 @@ def build_intake_merge_prompt(title: str, genre: str, style_note: str, chunks: l
     extra_notes = clean(chunks[3] if len(chunks) > 3 else "")
 
     intake = INTAKE_TEMPLATE.format(
-        title=clean(title),
-        genre=clean(genre),
-        style_note=clean(style_note),
+        title=clean(title) or "(미정)",
+        genre=clean(genre) or "(미정)",
+        style_note=clean(style_note) or "(미정)",
         overview=overview or "(없음)",
         characters=characters or "(없음)",
         synopsis=synopsis or "(없음)",
@@ -149,7 +148,6 @@ def build_intake_merge_prompt(title: str, genre: str, style_note: str, chunks: l
     ).strip()
 
 
-
 def build_gap_diagnosis_prompt(title: str, genre: str, merged_summary: str) -> str:
     return dedent(
         f"""
@@ -183,7 +181,6 @@ def build_gap_diagnosis_prompt(title: str, genre: str, merged_summary: str) -> s
         - Mr.MOON 스타일의 장점(장면성, 감각어, 상업성, 플롯-로맨스 결합)을 약화시키지 않는 방향으로 제안하라.
         """
     ).strip()
-
 
 
 def build_story_reinforcement_prompt(title: str, genre: str, merged_summary: str, gap_report: str) -> str:
@@ -224,7 +221,6 @@ def build_story_reinforcement_prompt(title: str, genre: str, merged_summary: str
     ).strip()
 
 
-
 def build_unit_plan_prompt(title: str, genre: str, reinforced_story: str) -> str:
     return dedent(
         f"""
@@ -261,7 +257,6 @@ def build_unit_plan_prompt(title: str, genre: str, reinforced_story: str) -> str
         - 각 Unit은 다음 Unit을 읽게 만드는 상업적 압력을 남겨야 한다.
         """
     ).strip()
-
 
 
 def build_unit_draft_prompt(
@@ -325,7 +320,6 @@ def build_unit_draft_prompt(
     ).strip()
 
 
-
 def build_rewrite_prompt(mode: str, text: str) -> str:
     mode_map = {
         "더 상업적으로": "흡입력, 가독성, 장면 추진력을 강화하라.",
@@ -358,5 +352,59 @@ def build_rewrite_prompt(mode: str, text: str) -> str:
         - 더 강한 상업 장편소설 초안처럼 읽히게 만든다.
         - 기계적으로 꾸미지 말고 자연스럽게 개선한다.
         - 해설 없이 바로 수정된 소설 본문만 출력한다.
+        """
+    ).strip()
+
+
+def build_title_review_prompt(
+    current_title: str,
+    genre: str,
+    merged_summary: str,
+    reinforced_story: str,
+    unit_plan: str,
+    drafts_text: str,
+) -> str:
+    return dedent(
+        f"""
+        아래 자료를 읽고, 현재 가제가 적절한지 검토한 뒤 제목 대안을 제안하라.
+
+        [현재 가제]
+        {clean(current_title) or '(미정)'}
+
+        [장르]
+        {clean(genre)}
+
+        [통합 분석]
+        {clean(merged_summary) or '(없음)'}
+
+        [전체 줄거리 보강]
+        {clean(reinforced_story) or '(없음)'}
+
+        [12 Unit 설계]
+        {clean(unit_plan) or '(없음)'}
+
+        [생성된 원고 발췌]
+        {clean(drafts_text) or '(없음)'}
+
+        목표:
+        - 현재 가제가 작품의 핵심 정서와 상징을 제대로 담는지 평가한다.
+        - 실제 원고의 반복 대사, 상징어, 감각어, 마지막 정서까지 고려해 더 강한 제목을 제안한다.
+        - 제목은 검색성과 기억성, 장르 감각, 영상화 가능성까지 고려한다.
+
+        반드시 아래 형식으로 작성한다.
+        1. 현재 가제 유지 여부 판단
+        2. 판단 이유
+        3. 원고 안에서 제목감이 되는 핵심 단어/대사/상징 5개
+        4. 메인 추천 제목 5개
+        5. 더 상업적인 제목 5개
+        6. 더 영상화에 강한 제목 5개
+        7. 가제 + 부제 조합 5개
+        8. 최종 1순위 추천과 이유
+
+        규칙:
+        - 흔한 제목, 너무 설명적인 제목, 장르 클리셰 제목은 피한다.
+        - 작품 안에서 살아 있는 단어를 우선한다.
+        - 한국어 제목을 기본으로 쓰고, 필요하면 괄호 안 영문 후보를 병기해도 된다.
+        - 제목만 나열하지 말고, 살아남는 이유를 짧게 덧붙인다.
         """
     ).strip()

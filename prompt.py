@@ -303,7 +303,6 @@ def build_unit_blueprint_prompt(
 - 각 Unit당 아래 5개 항목만 작성할 것
 - 군더더기 설명 없이 핵심 기능과 후킹을 분명하게 제시할 것
 - Unit 12가 포함된 경우, Unit 12는 반드시 본편을 마무리하도록 설계할 것
-- 각 Unit은 장편 분량을 버틸 수 있는 장면성과 감정 전환을 가져야 한다
 
 출력 형식:
 [UNIT XX]
@@ -360,6 +359,8 @@ def build_unit_draft_prompt(
     previous_drafts: str,
     style_dna: str,
     style_strength: str,
+    target_length: int,
+    min_length: int,
 ) -> str:
     if unit_no == 12:
         final_rule = """
@@ -382,11 +383,19 @@ def build_unit_draft_prompt(
 중요 원칙:
 - 줄거리 요약처럼 쓰지 말고 실제 소설 원고로 쓸 것
 - 장면으로 전개할 것
+- 최소 4개의 장면 블록을 포함할 것
+  1) 도입 장면
+  2) 전개 장면
+  3) 전환 장면
+  4) 마감 장면
 - 감각적 진입, 행동, 대사, 갈등, 감정 변화가 살아 있어야 한다
 - 설명이 길어지면 장면과 대사로 전환할 것
 - 장르 정보, 시대 정보, 전문 정보는 플롯 장치처럼 쓸 것
 - 중요한 대면 장면은 축약하지 말 것
-- 각 Unit은 지나치게 짧게 끝내지 말고, 하나의 서사 단위로 충분히 읽히게 쓸 것
+- 이 Unit의 목표 분량은 약 {target_length}자이며 최소 {min_length}자 이상을 확보할 것
+- 분량이 부족하면 요약하지 말고 장면, 대화, 감정 반응, 행동 묘사를 확장해 채울 것
+- 문장이 미완성인 상태로 끝나면 안 된다
+- 마지막 문단은 반드시 장면적으로 닫히거나 다음 Unit로 이어지는 압력을 남겨야 한다
 
 {final_rule}
 
@@ -427,20 +436,48 @@ def build_unit_draft_prompt(
 """.strip()
 
 
+def build_expand_incomplete_unit_prompt(
+    unit_no: int,
+    current_text: str,
+    target_length: int,
+    min_length: int,
+) -> str:
+    final_rule = "마지막 줄에는 정확히 `끝.` 을 단독으로 출력하라." if unit_no in (12, 13) else "`끝.` 을 붙이지 않는다."
+    return f"""
+다음 UNIT 원고는 분량이 부족하거나 끝맺음이 미완성이다.
+기존 텍스트를 반복하지 말고, 바로 이어서 장면을 확장하고 마무리를 완성하라.
+
+요구사항:
+- 현재 원고의 톤, 시점, 흐름을 유지할 것
+- 최소 2개의 추가 장면 또는 장면 블록을 더해도 좋다
+- 요약문으로 건너뛰지 말 것
+- 대사, 행동, 감정 반응, 공간 디테일을 사용해 자연스럽게 확장할 것
+- 전체 결과가 최소 {min_length}자 이상, 가능하면 {target_length}자 내외가 되도록 보강할 것
+- 문장이 중간에 끊기지 않게 완결된 문장으로 마무리할 것
+- {final_rule}
+
+[현재 원고]
+{current_text}
+""".strip()
+
+
 def build_unit_rewrite_prompt(
     unit_no: int,
     rewrite_mode: str,
     source_text: str,
     style_dna: str,
+    target_length: int,
+    min_length: int,
 ) -> str:
     ending_rule = "마지막 줄에 `끝.` 을 유지한다." if unit_no in (12, 13) else "`끝.` 을 붙이지 않는다."
-
     return f"""
 다음 UNIT 원고를 `{rewrite_mode}` 방향으로 다시 써라.
 
 요구사항:
 - 플롯을 함부로 바꾸지 말고 문장, 장면 밀도, 감정 전달, 후킹, 가독성을 개선할 것
 - 요약문처럼 압축하지 말고 소설 문장으로 유지할 것
+- 최소 {min_length}자 이상, 가능하면 {target_length}자 내외의 밀도를 확보할 것
+- 장면 블록이 지나치게 줄어들지 않게 할 것
 - Style DNA를 유지할 것
 - {ending_rule}
 
@@ -467,7 +504,7 @@ def build_epilogue_prompt(
 다음 작품의 UNIT 13 · 에필로그를 작성하라.
 
 요구사항:
-- 약 2페이지 내외의 정서적 마무리
+- 약 2000~3000자 내외의 정서적 마무리
 - 본편을 다시 뒤집지 말 것
 - 후일담, 여운, 상징 회수, 관계의 잔향을 중심으로 쓸 것
 - 군더더기 설명을 피하고 마지막 정서가 또렷하게 남게 할 것

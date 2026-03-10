@@ -23,6 +23,7 @@ from prompt import (
     build_unit_rewrite_prompt,
     build_title_review_prompt,
     build_epilogue_prompt,
+    build_expand_incomplete_unit_prompt,
 )
 
 # ─────────────────────────────────────
@@ -35,6 +36,22 @@ DEFAULT_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
 MAX_TOKENS_SHORT = 3000
 MAX_TOKENS_MID = 5000
 MAX_TOKENS_LONG = 7000
+
+UNIT_TARGET_LENGTHS = {
+    1: 7000, 2: 7000, 3: 8000,
+    4: 8000, 5: 8000, 6: 9000,
+    7: 9000, 8: 9000, 9: 8000,
+    10: 8000, 11: 8000, 12: 9000,
+    13: 2500,
+}
+
+UNIT_MIN_LENGTHS = {
+    1: 6000, 2: 6000, 3: 6500,
+    4: 6500, 5: 6500, 6: 7000,
+    7: 7000, 8: 7000, 9: 6500,
+    10: 6500, 11: 6500, 12: 7000,
+    13: 1800,
+}
 
 # ─────────────────────────────────────
 # PAGE
@@ -305,6 +322,26 @@ def ensure_final_ending(text: str, unit_no: int) -> str:
     return text
 
 
+def is_incomplete_text(text: str, unit_no: int) -> bool:
+    txt = (text or "").strip()
+    if not txt:
+        return True
+
+    min_len = UNIT_MIN_LENGTHS.get(unit_no, 6000)
+    if len(txt) < min_len:
+        return True
+
+    valid_endings = [".", "!", "?", "”", "\"", "’", "'", "끝."]
+    if not any(txt.endswith(e) for e in valid_endings):
+        return True
+
+    lines = [line for line in txt.splitlines() if line.strip()]
+    if len(lines) < 12:
+        return True
+
+    return False
+
+
 def get_story_reinforcement_text() -> str:
     sr = st.session_state["story_reinforcement"]
     merged = []
@@ -401,6 +438,24 @@ def run_with_status(start_message: str, done_message: str, fn):
         except Exception as e:
             set_status(f"작업 중 오류가 발생했습니다: {e}", "error")
             return None
+
+
+def generate_or_expand_unit(unit_no: int, prompt: str) -> str:
+    result = llm_call(prompt, max_tokens=MAX_TOKENS_LONG)
+    result = ensure_final_ending(result, unit_no)
+
+    if is_incomplete_text(result, unit_no):
+        expand_prompt = build_expand_incomplete_unit_prompt(
+            unit_no=unit_no,
+            current_text=result,
+            target_length=UNIT_TARGET_LENGTHS.get(unit_no, 8000),
+            min_length=UNIT_MIN_LENGTHS.get(unit_no, 6000),
+        )
+        extra = llm_call(expand_prompt, max_tokens=MAX_TOKENS_MID)
+        result = (result.rstrip() + "\n\n" + extra.strip()).strip()
+        result = ensure_final_ending(result, unit_no)
+
+    return result
 
 
 # ─────────────────────────────────────
@@ -674,7 +729,7 @@ with draft_col1:
                     all_drafts_text=gather_all_drafts_text(),
                     style_dna=st.session_state["style_dna"],
                 )
-                return llm_call(prompt, max_tokens=MAX_TOKENS_LONG)
+                return generate_or_expand_unit(13, prompt)
 
             result = run_with_status(
                 "UNIT 13 에필로그를 생성 중입니다...",
@@ -682,7 +737,7 @@ with draft_col1:
                 _job,
             )
             if result is not None:
-                st.session_state["unit_drafts"][selected_unit] = ensure_final_ending(result, 13)
+                st.session_state["unit_drafts"][selected_unit] = result
         else:
             def _job():
                 prompt = build_unit_draft_prompt(
@@ -700,8 +755,10 @@ with draft_col1:
                     previous_drafts=gather_all_drafts_text(),
                     style_dna=st.session_state["style_dna"],
                     style_strength=style_strength,
+                    target_length=UNIT_TARGET_LENGTHS.get(unit_no, 8000),
+                    min_length=UNIT_MIN_LENGTHS.get(unit_no, 6000),
                 )
-                return llm_call(prompt, max_tokens=MAX_TOKENS_LONG)
+                return generate_or_expand_unit(unit_no, prompt)
 
             done_msg = f"UNIT {unit_no:02d} 원고 생성이 완료되었습니다."
             if unit_no == 12:
@@ -713,7 +770,12 @@ with draft_col1:
                 _job,
             )
             if result is not None:
-                st.session_state["unit_drafts"][selected_unit] = ensure_final_ending(result, unit_no)
+                st.session_state["unit_drafts"][selected_unit] = result
+                if is_incomplete_text(result, unit_no):
+                    set_status(
+                        f"UNIT {unit_no:02d}는 생성되었지만 아직 짧거나 미완성일 수 있습니다. 다시 쓰기나 재생성을 권장합니다.",
+                        "warning",
+                    )
 
 with draft_col2:
     rewrite_mode = st.selectbox(
@@ -730,8 +792,10 @@ with draft_col2:
                     rewrite_mode=rewrite_mode,
                     source_text=source_text,
                     style_dna=st.session_state["style_dna"],
+                    target_length=UNIT_TARGET_LENGTHS.get(int(selected_unit), 8000),
+                    min_length=UNIT_MIN_LENGTHS.get(int(selected_unit), 6000),
                 )
-                return llm_call(prompt, max_tokens=MAX_TOKENS_LONG)
+                return generate_or_expand_unit(int(selected_unit), prompt)
 
             result = run_with_status(
                 f"UNIT {selected_unit}를 다시 쓰는 중입니다...",
@@ -739,9 +803,14 @@ with draft_col2:
                 _job,
             )
             if result is not None:
-                st.session_state["unit_drafts"][selected_unit] = ensure_final_ending(result, int(selected_unit))
+                st.session_state["unit_drafts"][selected_unit] = result
 
 with draft_col3:
+    unit_num = int(selected_unit)
+    st.markdown(
+        f'<div class="small-meta">목표 분량 {UNIT_TARGET_LENGTHS.get(unit_num, 8000):,}자 / 최소 {UNIT_MIN_LENGTHS.get(unit_num, 6000):,}자</div>',
+        unsafe_allow_html=True,
+    )
     st.markdown(
         '<div class="small-meta">UNIT 12는 본편을 반드시 마무리합니다. UNIT 13은 선택형 에필로그입니다.</div>',
         unsafe_allow_html=True,

@@ -32,10 +32,10 @@ from prompt import (
 APP_TITLE = "BLUE JEANS NOVEL ENGINE"
 APP_SUB = "NOVEL WRITER STUDIO"
 
-DEFAULT_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
-MAX_TOKENS_SHORT = 3000
-MAX_TOKENS_MID = 5000
-MAX_TOKENS_LONG = 7000
+DEFAULT_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+MAX_TOKENS_SHORT = 4000
+MAX_TOKENS_MID = 6000
+MAX_TOKENS_LONG = 8192
 
 UNIT_TARGET_LENGTHS = {
     1: 7000, 2: 7000, 3: 8000,
@@ -253,6 +253,7 @@ details[open] > div { background-color: var(--card) !important; }
 # ─────────────────────────────────────
 # STATE
 # ─────────────────────────────────────
+# FIX: unit_drafts 키를 zero-padded 형식("01"~"13")으로 통일
 DEFAULT_STATE = {
     "style_dna": "",
     "merged_analysis": "",
@@ -267,7 +268,7 @@ DEFAULT_STATE = {
         "09-10": "",
         "11-12": "",
     },
-    "unit_drafts": {str(i): "" for i in range(1, 14)},
+    "unit_drafts": {f"{i:02d}" if i < 13 else "13": "" for i in range(1, 14)},
     "title_review": "",
     "status_message": "",
     "status_type": "info",
@@ -331,7 +332,7 @@ def is_incomplete_text(text: str, unit_no: int) -> bool:
     if len(txt) < min_len:
         return True
 
-    valid_endings = [".", "!", "?", "”", "\"", "’", "'", "끝."]
+    valid_endings = [".", "!", "?", "\u201d", "\"", "'", "\u2019", "끝."]
     if not any(txt.endswith(e) for e in valid_endings):
         return True
 
@@ -367,7 +368,8 @@ def gather_all_drafts_text() -> str:
     drafts = st.session_state["unit_drafts"]
     merged = []
     for i in range(1, 14):
-        txt = drafts.get(str(i), "")
+        key = f"{i:02d}" if i < 13 else "13"
+        txt = drafts.get(key, "")
         if txt.strip():
             label = "UNIT 13 · 에필로그" if i == 13 else f"UNIT {i:02d}"
             merged.append(f"[{label}]\n{txt}")
@@ -899,7 +901,6 @@ with u1:
         use_container_width=True,
         disabled=not bool(current_unit_text),
         key=f"download_unit_txt_{selected_unit}",
-        on_click="ignore",
     )
 
 with u2:
@@ -911,7 +912,6 @@ with u2:
         use_container_width=True,
         disabled=not bool(current_unit_text),
         key=f"download_unit_docx_{selected_unit}",
-        on_click="ignore",
     )
 
 st.markdown("**최종 원고 저장**")
@@ -926,7 +926,6 @@ with exp1:
         use_container_width=True,
         disabled=not bool(manuscript.strip()),
         key="download_final_txt",
-        on_click="ignore",
     )
 
 with exp2:
@@ -938,7 +937,6 @@ with exp2:
         use_container_width=True,
         disabled=not bool(manuscript.strip()),
         key="download_final_docx",
-        on_click="ignore",
     )
 
 with st.expander("최종 원고 미리보기", expanded=False):

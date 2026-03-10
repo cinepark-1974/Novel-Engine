@@ -1,288 +1,410 @@
 from __future__ import annotations
 
-from io import BytesIO
-from typing import Dict
+from textwrap import dedent
 
-import streamlit as st
-from anthropic import Anthropic
-from docx import Document
 
-from prompt import (
-    SYSTEM_PROMPT,
-    build_epilogue_prompt,
-    build_gap_diagnosis_prompt,
-    build_intake_merge_prompt,
-    build_rewrite_prompt,
-    build_story_reinforcement_prompt,
-    build_title_review_prompt,
-    build_unit_draft_prompt,
-    build_unit_plan_prompt,
-)
+def clean(text: str | None) -> str:
+    return (text or "").strip()
 
-APP_TITLE = "BLUE JEANS NOVEL ENGINE"
-ANTHROPIC_MODEL = "claude-sonnet-4-6"
-DEFAULT_STYLE = "시드니 셀던 스타일의 대중 장편소설 감각. 빠르게 읽히고, 장면이 선명하며, 챕터 말미 후킹이 강한 문체."
 
-st.set_page_config(page_title=APP_TITLE, page_icon="👖", layout="wide", initial_sidebar_state="collapsed")
-
-DEFAULT_STATE = {
-    "title": "",
-    "working_title": "",
-    "genre": "스릴러",
-    "style_note": DEFAULT_STYLE,
-    "overview": "",
-    "characters": "",
-    "synopsis": "",
-    "extra_notes": "",
-    "merged_summary": "",
-    "gap_report": "",
-    "reinforced_story": "",
-    "unit_plan": "",
-    "selected_unit": 1,
-    "rewrite_mode": "더 상업적으로",
-    "unit_drafts": {},
-    "title_review": "",
-}
-for k, v in DEFAULT_STATE.items():
-    st.session_state.setdefault(k, v)
-
-st.markdown(
+AUTHOR_STYLE_DNA = dedent(
     """
-<style>
-@import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
-@import url('https://cdn.jsdelivr.net/gh/projectnoonnu/2408-3@latest/Paperlogy.css');
-@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&display=swap');
-:root {
-    --navy:#202A78; --y:#FFCB05; --bg:#F7F7F5; --card:#FFFFFF; --card-border:#DDDDE6;
-    --t:#2A2A3A; --dim:#8A8FA3; --light-bg:#EEEEF6; --display:'Playfair Display','Paperlogy','Georgia',serif;
-    --body:'Pretendard',-apple-system,BlinkMacSystemFont,sans-serif; --heading:'Paperlogy','Pretendard',sans-serif;
-}
-html, body, [class*="css"] { font-family:var(--body); color:var(--t); -webkit-font-smoothing:antialiased; }
-.stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"], [data-testid="stMainBlockContainer"], [data-testid="stHeader"], [data-testid="stBottom"] { background-color:var(--bg)!important; color:var(--t)!important; }
-section[data-testid="stSidebar"] { display:none; }
-h1,h2,h3,h4,h5,h6 { color:var(--navy)!important; font-family:var(--heading)!important; }
-p, span, label, div, li { color:var(--t); }
-.stTextInput input, .stTextArea textarea, [data-baseweb="select"] > div {
-    background-color:var(--card)!important; color:var(--t)!important; border:1.5px solid var(--card-border)!important;
-    border-radius:8px!important; font-family:var(--body)!important;
-}
-.stButton > button, .stDownloadButton > button {
-    border-radius:8px!important; font-weight:800!important; border:1.5px solid var(--card-border)!important;
-}
-.stButton > button[kind="primary"], .stButton > button[data-testid="stBaseButton-primary"], .stDownloadButton > button {
-    background-color:var(--y)!important; color:var(--navy)!important; border-color:var(--y)!important;
-}
-.brand-wrap { text-align:center; margin:0 0 1.3rem 0; }
-.header { font-size:0.74rem; font-weight:700; color:var(--navy); letter-spacing:0.23em; font-family:var(--heading); }
-.brand-title { font-size:2.15rem; font-weight:900; color:var(--navy); font-family:var(--display); letter-spacing:-0.02em; display:inline-block; position:relative; }
-.brand-title::after { content:''; position:absolute; left:0; bottom:1px; width:100%; height:4px; background:var(--y); border-radius:2px; }
-.sub { font-size:0.68rem; color:var(--dim); letter-spacing:0.18em; margin-top:.45rem; }
-.section-header { background:var(--y); color:var(--navy); padding:.65rem 1rem; border-radius:6px; font-weight:800; font-size:1rem; font-family:var(--heading); margin:1.25rem 0 .8rem 0; display:flex; justify-content:space-between; align-items:center; }
-.section-header .en { font-family:var(--display); font-size:.75rem; opacity:.8; }
-.callout { background:var(--light-bg); border-left:4px solid var(--navy); padding:.95rem 1rem; border-radius:0 8px 8px 0; margin:.45rem 0 1rem 0; }
-.small-meta { font-size:.78rem; color:var(--dim); margin-top:-.15rem; margin-bottom:.55rem; }
-</style>
-""",
-    unsafe_allow_html=True,
-)
+    [Mr.MOON STYLE DNA]
+    - 이 작품은 영화친화적인 상업 장편소설 톤으로 쓴다.
+    - 문장은 과하게 난해하지 않되, 장면이 또렷이 보이게 쓴다.
+    - 각 장면은 공간, 빛, 냄새, 소리, 촉감 중 최소 1개 이상의 감각 요소로 시작한다.
+    - 세계관 설명은 요약문처럼 길게 설명하지 말고 사건, 대화, 인물 반응 속에 녹여낸다.
+    - 주요 인물은 첫 등장 장면에서 직업, 결핍, 비밀, 욕망 중 최소 2개가 드러나야 한다.
+    - 대사는 멋을 부리기보다 갈등, 관계 변화, 정보 전진에 기여해야 한다.
+    - 감정은 직접 말할 수 있으나, 중요한 장면에서는 시선, 침묵, 몸짓, 행동으로 한 번 더 보여준다.
+    - 로맨스는 플롯과 분리하지 말고, 정보 교환과 위험 노출, 계급 충돌과 함께 전진시킨다.
+    - 장면 말미에는 반전, 위협, 감정 흔들림, 선택 압력 중 하나를 남겨 다음 장을 열게 만든다.
+    - 작품 전체에서 감각어와 물성어를 반복 모티프로 사용해 세계관과 정서를 연결한다.
+    - 설명은 친절하되 평범한 해설문처럼 들리지 않게 하고, 장면화 가능한 순간으로 전환한다.
+    - 문장은 중간 길이를 기본으로 하되, 전환과 충격의 순간에는 짧게 끊어 리듬을 만든다.
+    - 인물의 외형은 단순 미사여구보다 상대의 반응, 행동의 변화, 장면의 공기 속에서 드러낸다.
+    - 독자가 길을 잃지 않도록 구조는 명확하게 유지하되, 감정과 비밀의 압력은 점층적으로 높인다.
+    """
+).strip()
 
 
-def sec(title: str, en: str) -> None:
-    st.markdown(f'<div class="section-header"><span>{title}</span><span class="en">{en}</span></div>', unsafe_allow_html=True)
+SYSTEM_PROMPT = dedent(
+    f"""
+    You are BLUE JEANS NOVEL ENGINE.
+
+    You are a professional commercial novel development engine for long-form fiction.
+    Your task is to transform planning documents into compelling Korean popular fiction with cinematic propulsion.
+
+    Core mission:
+    - Analyze planning materials clearly.
+    - Diagnose what is missing for long-form fiction.
+    - Reinforce the full story into a sustainable 12-unit novel structure.
+    - Draft each unit as actual prose, not summary.
+    - Maintain readability, suspense, visual immediacy, and emotional pull.
+
+    Non-negotiable rules:
+    - Never sound like a manual, screenplay outline, or development memo unless the user explicitly asks for one.
+    - Never write generic AI-sounding prose.
+    - Do not flatten scenes into summary when dramatic enactment is needed.
+    - Treat each unit as real novel pages, not a synopsis.
+    - Keep the writing commercial, readable, visual, and emotionally active.
+    - Preserve character voice and hidden tension.
+    - Information must function as conflict, risk, leverage, or revelation.
+    - If exposition gets long, convert it into scene, dialogue, reaction, or action.
+
+    Length and density policy:
+    - Long-form novel scale is the goal.
+    - Each generated unit should feel materially substantial, scene-based, and expandable.
+    - Avoid premature closure.
+    - When a passage feels compressed, expand through conflict, sensory detail, character reaction, and tactical dialogue.
+
+    Authorial style policy:
+    {AUTHOR_STYLE_DNA}
+
+    Output language:
+    - Korean by default.
+    - Be clean, elegant, commercial, and vivid.
+    """
+).strip()
 
 
-def llm(prompt_text: str) -> str:
-    api_key = st.secrets.get("ANTHROPIC_API_KEY", "")
-    if not api_key:
-        st.error("ANTHROPIC_API_KEY가 설정되어 있지 않습니다.")
-        st.stop()
-    client = Anthropic(api_key=api_key)
-    res = client.messages.create(
-        model=ANTHROPIC_MODEL,
-        max_tokens=6400,
-        temperature=0.8,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": prompt_text}],
+INTAKE_TEMPLATE = dedent(
+    """
+    [작품 기본 정보]
+    제목: {title}
+    장르: {genre}
+    문체 지향: {style_note}
+
+    [입력 자료]
+    작품 개요:
+    {overview}
+
+    캐릭터:
+    {characters}
+
+    줄거리 / 트리트먼트:
+    {synopsis}
+
+    추가 메모:
+    {extra_notes}
+    """
+).strip()
+
+
+STYLE_APPLICATION_NOTE = dedent(
+    f"""
+    [문체 적용 지침]
+    {AUTHOR_STYLE_DNA}
+
+    [추가 작품별 문체 지시]
+    {{style_note}}
+    """
+).strip()
+
+
+def build_intake_merge_prompt(title: str, genre: str, style_note: str, chunks: list[str]) -> str:
+    overview = clean(chunks[0] if len(chunks) > 0 else "")
+    characters = clean(chunks[1] if len(chunks) > 1 else "")
+    synopsis = clean(chunks[2] if len(chunks) > 2 else "")
+    extra_notes = clean(chunks[3] if len(chunks) > 3 else "")
+
+    intake = INTAKE_TEMPLATE.format(
+        title=clean(title) or "(미정)",
+        genre=clean(genre) or "(미정)",
+        style_note=clean(style_note) or "(미정)",
+        overview=overview or "(없음)",
+        characters=characters or "(없음)",
+        synopsis=synopsis or "(없음)",
+        extra_notes=extra_notes or "(없음)",
     )
-    return "".join(block.text for block in res.content if getattr(block, "type", "") == "text").strip()
+
+    return dedent(
+        f"""
+        다음 자료를 하나의 장편소설 기획으로 통합 분석하라.
+
+        {intake}
+
+        목표:
+        - 흩어진 입력 자료를 하나의 일관된 소설 기획으로 정리한다.
+        - 작품의 중심축을 선명하게 드러낸다.
+        - 아이디어 메모가 아니라 실제 장편소설 개발용 통합 문서처럼 정리한다.
+
+        반드시 포함할 항목:
+        1. 작품 한 줄 정의
+        2. 작품의 핵심 매력 5가지
+        3. 주인공 / 적대자 / 관계 구조 분석
+        4. 세계관과 장르의 매력
+        5. 장편화의 강점
+        6. 현재 이미 있는 재료
+        7. 우선순위 높은 보강 포인트
+        8. 영상화 시 유리한 포인트
+
+        작성 규칙:
+        - 명확하고 실전적인 한국어로 쓴다.
+        - 추상어보다 구체어를 쓴다.
+        - 이미 있는 장점을 잃지 않도록 보호하는 방향으로 쓴다.
+        - 문장 내내 {clean(style_note) or '상업 장편소설'} 지향을 유지한다.
+        """
+    ).strip()
 
 
-def summarize_for_context(text: str, max_chars: int = 1200) -> str:
-    t = (text or "").strip()
-    if len(t) <= max_chars:
-        return t
-    return t[:max_chars].rstrip() + "\n..."
+def build_gap_diagnosis_prompt(title: str, genre: str, merged_summary: str) -> str:
+    return dedent(
+        f"""
+        아래의 통합 분석을 바탕으로, 이 작품이 12만 자 내외 장편소설이 되기 위해 무엇이 부족한지 진단하라.
+
+        [작품명] {clean(title)}
+        [장르] {clean(genre)}
+
+        [통합 분석]
+        {clean(merged_summary)}
+
+        출력 목표:
+        - 문제를 모호하게 말하지 말고, 실제 집필 전에 보강해야 할 항목을 정확히 짚는다.
+
+        반드시 아래 구조를 따른다.
+        1. 현재 장편화에 가장 유리한 요소
+        2. 부족한 점 진단
+           - 주인공 욕망/결핍
+           - 적대 구조
+           - 관계 갈등
+           - 중반부 연료
+           - 장르 정보 활용
+           - 엔딩 회수 가능성
+        3. 왜 이 문제가 장편 분량에서 치명적인지
+        4. 반드시 보강해야 할 우선순위 TOP 5
+        5. 각 항목별 보강 제안
+
+        작성 규칙:
+        - 막연한 조언 금지.
+        - 실제로 플롯, 감정선, 정보선, 인물선이 어떻게 보강되어야 하는지 써라.
+        - Mr.MOON 스타일의 장점(장면성, 감각어, 상업성, 플롯-로맨스 결합)을 약화시키지 않는 방향으로 제안하라.
+        """
+    ).strip()
 
 
-def ensure_final_line(text: str) -> str:
-    body = (text or "").rstrip()
-    if body.endswith("끝."):
-        return body
-    return f"{body}\n\n끝."
+def build_story_reinforcement_prompt(title: str, genre: str, merged_summary: str, gap_report: str) -> str:
+    return dedent(
+        f"""
+        아래 자료를 바탕으로 장편소설용 전체 줄거리를 보강하라.
+
+        [작품명] {clean(title)}
+        [장르] {clean(genre)}
+
+        [통합 분석]
+        {clean(merged_summary)}
+
+        [부족한 점 진단]
+        {clean(gap_report)}
+
+        목표:
+        - 이 작품이 12개 Unit로 확장 가능한 장편소설이 되도록 전체 줄거리를 보강한다.
+        - 단순 시놉시스가 아니라, 장편 전체를 끌고 갈 수 있는 압력과 관계 변화를 설계한다.
+
+        반드시 포함할 항목:
+        1. 장편소설용 강화 로그라인
+        2. 시작 / 중반 / 위기 / 결전 / 결말의 흐름
+        3. 주인공 아크
+        4. 적대자 아크
+        5. 관계 아크
+        6. 중반 이후 확장되는 갈등 연료
+        7. 장르 정보가 사건으로 작동하는 방식
+        8. 결말의 정서적 회수
+
+        작성 규칙:
+        - 요약문처럼 말고, 실제 소설화가 가능한 형태로 쓴다.
+        - 사건만 나열하지 말고 감정 변화와 선택의 대가를 함께 넣는다.
+        - 설명 과다 구간은 장면으로 환산 가능한 방식으로 설계한다.
+        - 정보, 시대, 세계관 요소가 감정과 분리되지 않게 한다.
+        - 상업 장편소설의 흡입력을 유지한다.
+        """
+    ).strip()
 
 
-def can_generate_unit(unit_no: int) -> bool:
-    if unit_no == 13:
-        return bool(st.session_state["unit_drafts"].get(12))
-    return bool(st.session_state["unit_plan"] and st.session_state["reinforced_story"])
+def build_unit_plan_prompt(title: str, genre: str, reinforced_story: str) -> str:
+    return dedent(
+        f"""
+        아래 전체 줄거리 보강안을 바탕으로 12 Unit 장편소설 구조를 설계하라.
+
+        [작품명] {clean(title)}
+        [장르] {clean(genre)}
+
+        [전체 줄거리 보강]
+        {clean(reinforced_story)}
+
+        목표:
+        - 총 12개 Unit으로 구성된 장편소설 구조를 만든다.
+        - 각 Unit은 약 1만 자 안팎으로 확장 가능한 밀도를 가져야 한다.
+        - 각 Unit이 독립적인 사건 기능과 감정 전환을 가지게 한다.
+
+        출력 형식:
+        Unit 01 ~ Unit 12까지 각각 아래 항목을 반드시 포함한다.
+        - Unit 제목
+        - 서사 기능
+        - 핵심 사건
+        - 감정 변화
+        - 공개 정보
+        - 숨길 정보
+        - 주요 관계 변화
+        - 감각/정보 포인트
+        - 엔딩 훅
+
+        추가 규칙:
+        - Unit 01은 강한 오프닝이어야 한다.
+        - Unit 06 전후에는 판을 흔드는 변화가 있어야 한다.
+        - Unit 08~10 구간에는 추락, 재정렬, 결전 준비가 살아 있어야 한다.
+        - Unit 12는 플롯 정리뿐 아니라 정서 회수까지 포함한다.
+        - 각 Unit은 다음 Unit을 읽게 만드는 상업적 압력을 남겨야 한다.
+        """
+    ).strip()
 
 
-def build_full_export_text() -> str:
-    parts = []
-    for i in range(1, 14):
-        txt = st.session_state["unit_drafts"].get(i, "").strip()
-        if txt:
-            label = f"UNIT {i:02d}" if i < 13 else "UNIT 13 · 에필로그"
-            parts.append(f"{label}\n\n{txt}")
-    full = "\n\n".join(parts).strip()
-    if full and (st.session_state["unit_drafts"].get(12) or st.session_state["unit_drafts"].get(13)):
-        full = ensure_final_line(full)
-    return full
+def build_unit_draft_prompt(
+    title: str,
+    genre: str,
+    style_note: str,
+    reinforced_story: str,
+    unit_plan: str,
+    unit_number: int,
+    previous_unit_summary: str,
+) -> str:
+    prev_block = clean(previous_unit_summary) or "(직전 Unit 없음)"
+    style_block = STYLE_APPLICATION_NOTE.format(style_note=clean(style_note) or "(없음)")
+
+    return dedent(
+        f"""
+        아래 자료를 바탕으로 Unit {unit_number:02d}의 실제 소설 원고를 작성하라.
+
+        [작품명] {clean(title)}
+        [장르] {clean(genre)}
+
+        {style_block}
+
+        [전체 줄거리 보강]
+        {clean(reinforced_story)}
+
+        [12 Unit 설계]
+        {clean(unit_plan)}
+
+        [직전 Unit 요약]
+        {prev_block}
+
+        [현재 작업]
+        Unit {unit_number:02d}
+
+        집필 목표:
+        - 이 출력은 시놉시스가 아니라 실제 소설 원고여야 한다.
+        - 장면이 보이고, 인물이 움직이고, 감정이 흔들려야 한다.
+        - 상업 장편소설답게 빠르게 읽히되, 평평한 설명문으로 흘러가지 말아야 한다.
+        - 필요하면 2~4개의 소챕터 흐름을 자연스럽게 포함해도 좋다.
+
+        반드시 지킬 규칙:
+        1. 첫 문단부터 공간, 행동, 감각으로 시작한다.
+        2. 정보를 길게 설명하지 말고 갈등과 반응 속에 녹인다.
+        3. 인물은 기능적 도구가 아니라 모순과 욕망을 지닌 사람처럼 보이게 쓴다.
+        4. 대사는 갈등, 유혹, 위협, 정보 전진 중 하나를 수행해야 한다.
+        5. 중요한 감정 장면은 한 번 더 행동과 침묵으로 보여준다.
+        6. 로맨스가 있다면 플롯과 함께 전진시킨다.
+        7. 장면 끝에는 다음 장을 열게 하는 압력을 남긴다.
+        8. 결론을 서둘러 닫지 않는다.
+
+        분량 규칙:
+        - 충분히 실질적인 Unit 초안이 되도록 풍부하게 쓴다.
+        - 장면을 요약하지 말고 전개하라.
+        - 압축이 심해지면 감각, 반응, 대화, 갈등, 선택을 통해 확장하라.
+
+        출력 형식:
+        - 바로 소설 본문으로 시작한다.
+        - 불필요한 머리말, 해설, 분석, 번호 목록 금지.
+        """
+    ).strip()
 
 
-def build_docx_bytes(text: str) -> bytes:
-    doc = Document()
-    for para in text.split("\n"):
-        doc.add_paragraph(para)
-    bio = BytesIO()
-    doc.save(bio)
-    bio.seek(0)
-    return bio.read()
+def build_rewrite_prompt(mode: str, text: str) -> str:
+    mode_map = {
+        "더 상업적으로": "흡입력, 가독성, 장면 추진력을 강화하라.",
+        "더 빠르게": "문장과 장면 전환 속도를 높이고 군더더기를 줄여라.",
+        "더 감정적으로": "감정의 여운과 관계의 떨림을 강화하라.",
+        "더 차갑게": "문장을 절제하고 긴장과 냉기를 강화하라.",
+        "더 스릴러답게": "위험, 추적, 의심, 반전의 압력을 높여라.",
+        "더 여성서사 중심으로": "주체성, 선택, 시선의 중심을 여성 인물에게 더 강하게 실어라.",
+        "더 영상적으로": "장면의 시각성, 동선, 현장감, 컷감 같은 리듬을 강화하라.",
+    }
+    mode_instruction = mode_map.get(clean(mode), "문체와 장면 밀도를 개선하라.")
+
+    return dedent(
+        f"""
+        아래 소설 원고를 다시 써라.
+
+        [리라이트 방향]
+        {clean(mode)}
+        {mode_instruction}
+
+        [유지해야 할 기본 작가 스타일]
+        {AUTHOR_STYLE_DNA}
+
+        [원고]
+        {clean(text)}
+
+        규칙:
+        - 줄거리의 핵심 사건은 유지한다.
+        - 원문의 장면성과 감각 모티프를 잃지 않는다.
+        - 더 강한 상업 장편소설 초안처럼 읽히게 만든다.
+        - 기계적으로 꾸미지 말고 자연스럽게 개선한다.
+        - 해설 없이 바로 수정된 소설 본문만 출력한다.
+        """
+    ).strip()
 
 
-st.markdown(
-    """
-<div class="brand-wrap">
-  <div class="header">BLUE JEANS PICTURES</div>
-  <div class="brand-title">NOVEL ENGINE</div>
-  <div class="sub">CINEMATIC · COMMERCIAL · LONG-FORM</div>
-</div>
-""",
-    unsafe_allow_html=True,
-)
+def build_title_review_prompt(
+    current_title: str,
+    genre: str,
+    merged_summary: str,
+    reinforced_story: str,
+    unit_plan: str,
+    drafts_text: str,
+) -> str:
+    return dedent(
+        f"""
+        아래 자료를 읽고, 현재 가제가 적절한지 검토한 뒤 제목 대안을 제안하라.
 
-st.markdown(
-    '<div class="callout"><b>FLOW TIP</b><br>입력 → 통합 분석 → 부족한 점 진단 → 전체 줄거리 보강 → 12 Unit 설계 → Unit 원고 생성 → 필요하면 Unit 13 에필로그 → 저장 → 제목 검토 순서로 진행합니다.</div>',
-    unsafe_allow_html=True,
-)
+        [현재 가제]
+        {clean(current_title) or '(미정)'}
 
-sec("STEP 1 · 기획서 입력", "INTAKE")
-col1, col2 = st.columns(2)
-with col1:
-    st.session_state["title"] = st.text_input("작품명", value=st.session_state["title"], placeholder="예: 머지 앤 어퀴지션")
-with col2:
-    st.session_state["genre"] = st.selectbox("장르", ["스릴러", "미스터리", "로맨스", "역사", "첩보", "금융", "범죄", "드라마", "SF", "기타"], index=["스릴러", "미스터리", "로맨스", "역사", "첩보", "금융", "범죄", "드라마", "SF", "기타"].index(st.session_state["genre"]) if st.session_state["genre"] in ["스릴러", "미스터리", "로맨스", "역사", "첩보", "금융", "범죄", "드라마", "SF", "기타"] else 0)
-col3, col4 = st.columns([1, 2])
-with col3:
-    st.session_state["working_title"] = st.text_input("현재 가제", value=st.session_state["working_title"], placeholder="예: 감각구역")
-with col4:
-    st.session_state["style_note"] = st.text_input("문체 지향", value=st.session_state["style_note"])
+        [장르]
+        {clean(genre)}
 
-st.session_state["overview"] = st.text_area("작품 개요", value=st.session_state["overview"], height=180, placeholder="로그라인, 기획의도, 세계관, 핵심 질문")
-col5, col6 = st.columns(2)
-with col5:
-    st.session_state["characters"] = st.text_area("캐릭터", value=st.session_state["characters"], height=220, placeholder="주인공, 적대자, 조력자, 관계, 욕망, 결핍, 비밀")
-with col6:
-    st.session_state["synopsis"] = st.text_area("줄거리 / 트리트먼트", value=st.session_state["synopsis"], height=220, placeholder="시작, 중반, 위기, 클라이맥스, 결말 방향")
-st.session_state["extra_notes"] = st.text_area("추가 메모(선택)", value=st.session_state["extra_notes"], height=140, placeholder="꼭 살릴 장면, 참고 문체, 조사 메모, 약한 부분")
+        [통합 분석]
+        {clean(merged_summary) or '(없음)'}
 
-sec("STEP 2 · 분석과 설계", "ANALYSIS")
-btn1, btn2, btn3, btn4 = st.columns(4)
-with btn1:
-    if st.button("기획서 통합 분석", use_container_width=True, type="primary"):
-        prompt_text = build_intake_merge_prompt(
-            st.session_state["title"], st.session_state["genre"], st.session_state["working_title"], st.session_state["style_note"],
-            st.session_state["overview"], st.session_state["characters"], st.session_state["synopsis"], st.session_state["extra_notes"],
-        )
-        with st.spinner("통합 분석 중..."):
-            st.session_state["merged_summary"] = llm(prompt_text)
-with btn2:
-    if st.button("부족한 점 진단", use_container_width=True, disabled=not st.session_state["merged_summary"]):
-        with st.spinner("부족한 점 진단 중..."):
-            st.session_state["gap_report"] = llm(build_gap_diagnosis_prompt(st.session_state["title"], st.session_state["genre"], st.session_state["merged_summary"]))
-with btn3:
-    if st.button("전체 줄거리 보강", use_container_width=True, disabled=not (st.session_state["merged_summary"] and st.session_state["gap_report"])):
-        with st.spinner("전체 줄거리 보강 중..."):
-            st.session_state["reinforced_story"] = llm(build_story_reinforcement_prompt(st.session_state["title"], st.session_state["genre"], st.session_state["merged_summary"], st.session_state["gap_report"]))
-with btn4:
-    if st.button("12 Unit 설계", use_container_width=True, disabled=not st.session_state["reinforced_story"]):
-        with st.spinner("12 Unit 설계 중..."):
-            st.session_state["unit_plan"] = llm(build_unit_plan_prompt(st.session_state["title"], st.session_state["genre"], st.session_state["reinforced_story"]))
+        [전체 줄거리 보강]
+        {clean(reinforced_story) or '(없음)'}
 
-if st.session_state["merged_summary"]:
-    st.markdown("### 통합 분석")
-    st.write(st.session_state["merged_summary"])
-if st.session_state["gap_report"]:
-    st.markdown("### 부족한 점 진단")
-    st.write(st.session_state["gap_report"])
-if st.session_state["reinforced_story"]:
-    st.markdown("### 전체 줄거리 보강")
-    st.write(st.session_state["reinforced_story"])
-if st.session_state["unit_plan"]:
-    st.markdown("### 12 Unit 설계")
-    st.write(st.session_state["unit_plan"])
+        [12 Unit 설계]
+        {clean(unit_plan) or '(없음)'}
 
-sec("STEP 3 · Unit 집필", "DRAFT")
-unit_options = list(range(1, 13)) + [13]
-unit_labels = {i: f"UNIT {i:02d}" for i in range(1, 13)}
-unit_labels[13] = "UNIT 13 · 에필로그"
-col7, col8 = st.columns([1, 1])
-with col7:
-    selected = st.selectbox("집필할 Unit 선택", unit_options, index=unit_options.index(st.session_state["selected_unit"]), format_func=lambda x: unit_labels[x])
-    st.session_state["selected_unit"] = selected
-with col8:
-    st.session_state["rewrite_mode"] = st.selectbox("다시 쓰기 모드", ["더 상업적으로", "더 감정적으로", "더 빠르게", "더 차갑게", "더 문학적으로", "더 영상적으로"], index=["더 상업적으로", "더 감정적으로", "더 빠르게", "더 차갑게", "더 문학적으로", "더 영상적으로"].index(st.session_state["rewrite_mode"]) if st.session_state["rewrite_mode"] in ["더 상업적으로", "더 감정적으로", "더 빠르게", "더 차갑게", "더 문학적으로", "더 영상적으로"] else 0)
+        [생성된 원고 발췌]
+        {clean(drafts_text) or '(없음)'}
 
-prev_summary = summarize_for_context(st.session_state["unit_drafts"].get(selected - 1, "")) if selected > 1 else ""
-if selected == 13:
-    st.markdown('<div class="callout"><b>EPILOGUE RULE</b><br>UNIT 13은 선택형 에필로그입니다. UNIT 12가 먼저 완성되어 있어야 하며, 약 2페이지 분량으로 정서적 여운과 최종 이미지를 제공합니다.</div>', unsafe_allow_html=True)
+        목표:
+        - 현재 가제가 작품의 핵심 정서와 상징을 제대로 담는지 평가한다.
+        - 실제 원고의 반복 대사, 상징어, 감각어, 마지막 정서까지 고려해 더 강한 제목을 제안한다.
+        - 제목은 검색성과 기억성, 장르 감각, 영상화 가능성까지 고려한다.
 
-c1, c2 = st.columns(2)
-with c1:
-    if st.button("Unit 원고 생성", use_container_width=True, type="primary", disabled=not can_generate_unit(selected)):
-        with st.spinner("원고 생성 중..."):
-            if selected == 13:
-                draft = llm(build_epilogue_prompt(
-                    st.session_state["title"], st.session_state["genre"], st.session_state["working_title"], st.session_state["style_note"],
-                    st.session_state["reinforced_story"], st.session_state["unit_plan"], st.session_state["unit_drafts"].get(12, "")
-                ))
-                draft = ensure_final_line(draft)
-            else:
-                draft = llm(build_unit_draft_prompt(
-                    st.session_state["title"], st.session_state["genre"], st.session_state["working_title"], st.session_state["style_note"],
-                    st.session_state["reinforced_story"], st.session_state["unit_plan"], selected, prev_summary,
-                ))
-                if selected == 12 and 13 not in st.session_state["unit_drafts"]:
-                    # main story must still feel closed even without epilogue.
-                    draft = draft.rstrip()
-            st.session_state["unit_drafts"][selected] = draft
-with c2:
-    if st.button("현재 Unit 다시 쓰기", use_container_width=True, disabled=not st.session_state["unit_drafts"].get(selected)):
-        with st.spinner("다시 쓰는 중..."):
-            rewritten = llm(build_rewrite_prompt(
-                st.session_state["rewrite_mode"], st.session_state["unit_drafts"].get(selected, ""), st.session_state["title"], st.session_state["genre"], st.session_state["style_note"]
-            ))
-            if selected == 13:
-                rewritten = ensure_final_line(rewritten)
-            st.session_state["unit_drafts"][selected] = rewritten
+        반드시 아래 형식으로 작성한다.
+        1. 현재 가제 유지 여부 판단
+        2. 판단 이유
+        3. 원고 안에서 제목감이 되는 핵심 단어/대사/상징 5개
+        4. 메인 추천 제목 5개
+        5. 더 상업적인 제목 5개
+        6. 더 영상화에 강한 제목 5개
+        7. 가제 + 부제 조합 5개
+        8. 최종 1순위 추천과 이유
 
-current_text = st.session_state["unit_drafts"].get(selected, "")
-st.text_area("원고", value=current_text, height=500, key=f"draft_view_{selected}")
-
-sec("STEP 4 · 저장하기", "EXPORT")
-export_text = build_full_export_text()
-col9, col10 = st.columns(2)
-with col9:
-    st.download_button("TXT 저장", data=export_text.encode("utf-8"), file_name=f"{(st.session_state['working_title'] or st.session_state['title'] or 'novel')}.txt", mime="text/plain", use_container_width=True, disabled=not export_text)
-with col10:
-    st.download_button("DOCX 저장", data=build_docx_bytes(export_text) if export_text else b"", file_name=f"{(st.session_state['working_title'] or st.session_state['title'] or 'novel')}.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", use_container_width=True, disabled=not export_text)
-
-sec("STEP 5 · 제목 검토 / 제안", "TITLE REVIEW AFTER DRAFT")
-st.markdown('<div class="callout"><b>TITLE LOGIC</b><br>이 단계는 현재 가제를 버리는 기능이 아니라, 완성된 설계와 생성 원고를 다시 읽고 가제를 유지할지, 보강할지, 더 강한 대안을 붙일지 검토하는 단계입니다.</div>', unsafe_allow_html=True)
-if st.button("원고 기반 제목 검토 / 제안", use_container_width=True, disabled=not export_text):
-    with st.spinner("제목 검토 중..."):
-        st.session_state["title_review"] = llm(build_title_review_prompt(
-            st.session_state["title"], st.session_state["working_title"], st.session_state["genre"], st.session_state["reinforced_story"], st.session_state["unit_plan"], export_text
-        ))
-if st.session_state["title_review"]:
-    st.write(st.session_state["title_review"])
+        규칙:
+        - 흔한 제목, 너무 설명적인 제목, 장르 클리셰 제목은 피한다.
+        - 작품 안에서 살아 있는 단어를 우선한다.
+        - 한국어 제목을 기본으로 쓰고, 필요하면 괄호 안 영문 후보를 병기해도 된다.
+        - 제목만 나열하지 말고, 살아남는 이유를 짧게 덧붙인다.
+        """
+    ).strip()

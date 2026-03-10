@@ -62,7 +62,6 @@ st.markdown(
     --card: #FFFFFF;
     --card-border: #DDDDE6;
     --t: #2A2A3A;
-    --g: #2EC484;
     --dim: #8A8FA3;
     --light-bg: #EEEEF6;
     --display: 'Playfair Display', 'Paperlogy', 'Georgia', serif;
@@ -170,7 +169,6 @@ section[data-testid="stSidebar"] { display: none; }
     border-radius: 8px !important;
 }
 details[open] > div { background-color: var(--card) !important; }
-.stAlert { color: var(--t) !important; border-radius: 8px !important; }
 
 .header {
     font-size: 0.85rem;
@@ -254,6 +252,8 @@ DEFAULT_STATE = {
     },
     "unit_drafts": {str(i): "" for i in range(1, 14)},
     "title_review": "",
+    "status_message": "",
+    "status_type": "info",
 }
 
 for k, v in DEFAULT_STATE.items():
@@ -277,24 +277,21 @@ def llm_call(user_prompt: str, max_tokens: int = MAX_TOKENS_MID) -> str:
             "[오프라인 미리보기 모드]\n\n"
             "ANTHROPIC_API_KEY가 설정되지 않았거나 anthropic 패키지가 설치되지 않았습니다.\n"
             "실제 모델 호출 대신 프롬프트 초안만 구성된 상태입니다.\n\n"
-            "아래 프롬프트를 API 연결 후 실행하세요:\n\n"
             + user_prompt[:4000]
         )
 
-    try:
-        response = client.messages.create(
-            model=DEFAULT_MODEL,
-            max_tokens=max_tokens,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_prompt}],
-        )
-        parts = []
-        for block in response.content:
-            if getattr(block, "type", None) == "text":
-                parts.append(block.text)
-        return "\n".join(parts).strip()
-    except Exception as e:
-        return f"[오류] 모델 호출 중 문제가 발생했습니다.\n\n{e}"
+    response = client.messages.create(
+        model=DEFAULT_MODEL,
+        max_tokens=max_tokens,
+        system=SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": user_prompt}],
+    )
+
+    parts = []
+    for block in response.content:
+        if getattr(block, "type", None) == "text":
+            parts.append(block.text)
+    return "\n".join(parts).strip()
 
 
 def merge_nonempty(parts: List[str], sep: str = "\n\n") -> str:
@@ -303,39 +300,9 @@ def merge_nonempty(parts: List[str], sep: str = "\n\n") -> str:
 
 def ensure_final_ending(text: str, unit_no: int) -> str:
     text = (text or "").rstrip()
-    if unit_no in (12, 13):
-        if not text.endswith("끝."):
-            return f"{text}\n\n끝."
+    if unit_no in (12, 13) and not text.endswith("끝."):
+        return f"{text}\n\n끝."
     return text
-
-
-def gather_project_context(
-    title: str,
-    overview: str,
-    characters: str,
-    synopsis: str,
-    notes: str,
-    style_dna: str,
-) -> str:
-    return f"""
-[현재 가제]
-{title}
-
-[작품 개요]
-{overview}
-
-[캐릭터]
-{characters}
-
-[줄거리 / 트리트먼트]
-{synopsis}
-
-[추가 메모]
-{notes}
-
-[STYLE DNA]
-{style_dna}
-""".strip()
 
 
 def get_story_reinforcement_text() -> str:
@@ -398,6 +365,44 @@ def final_manuscript_text(current_title: str) -> str:
     return manuscript
 
 
+def safe_filename(name: str) -> str:
+    name = (name or "novel_draft").strip()
+    name = re.sub(r"[^0-9A-Za-z가-힣_-]+", "_", name)
+    return name or "novel_draft"
+
+
+def set_status(message: str, status_type: str = "info") -> None:
+    st.session_state["status_message"] = message
+    st.session_state["status_type"] = status_type
+
+
+def render_status() -> None:
+    msg = st.session_state.get("status_message", "").strip()
+    status_type = st.session_state.get("status_type", "info")
+    if not msg:
+        return
+    if status_type == "success":
+        st.success(msg)
+    elif status_type == "error":
+        st.error(msg)
+    elif status_type == "warning":
+        st.warning(msg)
+    else:
+        st.info(msg)
+
+
+def run_with_status(start_message: str, done_message: str, fn):
+    set_status(start_message, "info")
+    with st.spinner(start_message):
+        try:
+            result = fn()
+            set_status(done_message, "success")
+            return result
+        except Exception as e:
+            set_status(f"작업 중 오류가 발생했습니다: {e}", "error")
+            return None
+
+
 # ─────────────────────────────────────
 # HEADER
 # ─────────────────────────────────────
@@ -415,8 +420,10 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+render_status()
+
 # ─────────────────────────────────────
-# INPUTS
+# STEP 1
 # ─────────────────────────────────────
 st.markdown('<div class="section-header">STEP 1 · 작품 자료 입력</div>', unsafe_allow_html=True)
 
@@ -459,50 +466,62 @@ notes = st.text_area(
 style_sample = st.text_area(
     "문체 샘플 (선택)",
     height=220,
-    placeholder="Mr.MOON이 직접 쓴 소설/산문/블로그 문장 일부. 이 작품에 반영하고 싶은 자신의 문장 샘플",
+    placeholder="Mr.MOON이 직접 쓴 소설/산문/블로그 문장 일부",
 )
 
 # ─────────────────────────────────────
-# STYLE DNA / ANALYSIS
+# STEP 2
 # ─────────────────────────────────────
 st.markdown('<div class="section-header">STEP 2 · 문체 / 분석</div>', unsafe_allow_html=True)
 
-c1, c2, c3 = st.columns([1, 1, 1])
+c1, c2, c3 = st.columns(3)
 
 with c1:
     if st.button("문체 샘플 분석", type="primary", use_container_width=True):
-        prompt = STYLE_DNA_ANALYSIS_PROMPT.format(style_sample=style_sample or "샘플 없음")
-        st.session_state["style_dna"] = llm_call(prompt, max_tokens=MAX_TOKENS_SHORT)
+        def _job():
+            prompt = STYLE_DNA_ANALYSIS_PROMPT.format(style_sample=style_sample or "샘플 없음")
+            return llm_call(prompt, max_tokens=MAX_TOKENS_SHORT)
+        result = run_with_status("문체 샘플을 분석 중입니다...", "문체 샘플 분석이 완료되었습니다.", _job)
+        if result is not None:
+            st.session_state["style_dna"] = result
 
 with c2:
     if st.button("기획서 통합 분석", use_container_width=True):
-        prompt = build_merge_analysis_prompt(
-            working_title=working_title,
-            genre=genre,
-            format_mode=format_mode,
-            pov=pov,
-            target_length=target_length,
-            overview=overview,
-            characters=characters,
-            synopsis=synopsis,
-            notes=notes,
-            style_dna=st.session_state["style_dna"],
-            style_strength=style_strength,
-        )
-        st.session_state["merged_analysis"] = llm_call(prompt, max_tokens=MAX_TOKENS_MID)
+        def _job():
+            prompt = build_merge_analysis_prompt(
+                working_title=working_title,
+                genre=genre,
+                format_mode=format_mode,
+                pov=pov,
+                target_length=target_length,
+                overview=overview,
+                characters=characters,
+                synopsis=synopsis,
+                notes=notes,
+                style_dna=st.session_state["style_dna"],
+                style_strength=style_strength,
+            )
+            return llm_call(prompt, max_tokens=MAX_TOKENS_MID)
+        result = run_with_status("기획서 통합 분석 중입니다...", "기획서 통합 분석이 완료되었습니다.", _job)
+        if result is not None:
+            st.session_state["merged_analysis"] = result
 
 with c3:
     if st.button("부족한 점 진단", use_container_width=True):
-        prompt = build_gap_diagnosis_prompt(
-            working_title=working_title,
-            merged_analysis=st.session_state["merged_analysis"],
-            overview=overview,
-            characters=characters,
-            synopsis=synopsis,
-            notes=notes,
-            style_dna=st.session_state["style_dna"],
-        )
-        st.session_state["gap_diagnosis"] = llm_call(prompt, max_tokens=MAX_TOKENS_MID)
+        def _job():
+            prompt = build_gap_diagnosis_prompt(
+                working_title=working_title,
+                merged_analysis=st.session_state["merged_analysis"],
+                overview=overview,
+                characters=characters,
+                synopsis=synopsis,
+                notes=notes,
+                style_dna=st.session_state["style_dna"],
+            )
+            return llm_call(prompt, max_tokens=MAX_TOKENS_MID)
+        result = run_with_status("부족한 점을 진단 중입니다...", "부족한 점 진단이 완료되었습니다.", _job)
+        if result is not None:
+            st.session_state["gap_diagnosis"] = result
 
 if st.session_state["style_dna"]:
     with st.expander("STYLE DNA 보기", expanded=False):
@@ -517,27 +536,36 @@ if st.session_state["gap_diagnosis"]:
         st.markdown(st.session_state["gap_diagnosis"])
 
 # ─────────────────────────────────────
-# STORY REINFORCEMENT
+# STEP 3
 # ─────────────────────────────────────
 st.markdown('<div class="section-header">STEP 3 · 전체 줄거리 보강 (기승전결 분할)</div>', unsafe_allow_html=True)
 
 sr_col1, sr_col2, sr_col3, sr_col4 = st.columns(4)
 
 def reinforce_segment(segment_name: str):
-    prompt = build_story_reinforcement_prompt(
-        segment_name=segment_name,
-        working_title=working_title,
-        genre=genre,
-        overview=overview,
-        characters=characters,
-        synopsis=synopsis,
-        notes=notes,
-        merged_analysis=st.session_state["merged_analysis"],
-        gap_diagnosis=st.session_state["gap_diagnosis"],
-        style_dna=st.session_state["style_dna"],
+    def _job():
+        prompt = build_story_reinforcement_prompt(
+            segment_name=segment_name,
+            working_title=working_title,
+            genre=genre,
+            overview=overview,
+            characters=characters,
+            synopsis=synopsis,
+            notes=notes,
+            merged_analysis=st.session_state["merged_analysis"],
+            gap_diagnosis=st.session_state["gap_diagnosis"],
+            style_dna=st.session_state["style_dna"],
+        )
+        return llm_call(prompt, max_tokens=MAX_TOKENS_MID)
+
+    result = run_with_status(
+        f"{segment_name} 구간을 장편소설 구조로 보강 중입니다...",
+        f"{segment_name} 구간 보강이 완료되었습니다.",
+        _job,
     )
-    st.session_state["story_reinforcement"][segment_name] = llm_call(prompt, max_tokens=MAX_TOKENS_MID)
-    get_story_reinforcement_text()
+    if result is not None:
+        st.session_state["story_reinforcement"][segment_name] = result
+        get_story_reinforcement_text()
 
 with sr_col1:
     if st.button("기 보강", use_container_width=True):
@@ -561,7 +589,7 @@ for seg in ["기", "승", "전", "결"]:
             st.markdown(seg_text)
 
 # ─────────────────────────────────────
-# UNIT BLUEPRINTS
+# STEP 4
 # ─────────────────────────────────────
 st.markdown('<div class="section-header">STEP 4 · 12 Unit 설계 (2 Unit씩 6개 버튼)</div>', unsafe_allow_html=True)
 
@@ -569,20 +597,29 @@ bp_cols_top = st.columns(3)
 bp_cols_bottom = st.columns(3)
 
 def build_blueprint(group_key: str):
-    prompt = build_unit_blueprint_prompt(
-        group_key=group_key,
-        working_title=working_title,
-        genre=genre,
-        format_mode=format_mode,
-        pov=pov,
-        overview=overview,
-        characters=characters,
-        story_reinforcement_merged=story_merged_text,
-        synopsis=synopsis,
-        notes=notes,
-        style_dna=st.session_state["style_dna"],
+    def _job():
+        prompt = build_unit_blueprint_prompt(
+            group_key=group_key,
+            working_title=working_title,
+            genre=genre,
+            format_mode=format_mode,
+            pov=pov,
+            overview=overview,
+            characters=characters,
+            story_reinforcement_merged=story_merged_text,
+            synopsis=synopsis,
+            notes=notes,
+            style_dna=st.session_state["style_dna"],
+        )
+        return llm_call(prompt, max_tokens=MAX_TOKENS_MID)
+
+    result = run_with_status(
+        f"UNIT {group_key} 설계를 생성 중입니다...",
+        f"UNIT {group_key} 설계가 완료되었습니다.",
+        _job,
     )
-    st.session_state["unit_blueprints"][group_key] = llm_call(prompt, max_tokens=MAX_TOKENS_MID)
+    if result is not None:
+        st.session_state["unit_blueprints"][group_key] = result
 
 buttons = [
     ("UNIT 01~02 설계", "01-02"),
@@ -607,7 +644,7 @@ for group_key in ["01-02", "03-04", "05-06", "07-08", "09-10", "11-12"]:
 all_blueprints_text = gather_blueprints_text()
 
 # ─────────────────────────────────────
-# UNIT DRAFTS
+# STEP 5
 # ─────────────────────────────────────
 st.markdown('<div class="section-header">STEP 5 · Unit 원고 생성 / 다시 쓰기</div>', unsafe_allow_html=True)
 
@@ -623,39 +660,60 @@ draft_col1, draft_col2, draft_col3 = st.columns([1, 1, 1])
 with draft_col1:
     if st.button("Unit 원고 생성", type="primary", use_container_width=True):
         unit_no = int(selected_unit)
+
         if unit_no == 13:
-            prompt = build_epilogue_prompt(
-                working_title=working_title,
-                genre=genre,
-                overview=overview,
-                characters=characters,
-                synopsis=synopsis,
-                story_reinforcement_merged=story_merged_text,
-                all_blueprints_text=all_blueprints_text,
-                all_drafts_text=gather_all_drafts_text(),
-                style_dna=st.session_state["style_dna"],
+            def _job():
+                prompt = build_epilogue_prompt(
+                    working_title=working_title,
+                    genre=genre,
+                    overview=overview,
+                    characters=characters,
+                    synopsis=synopsis,
+                    story_reinforcement_merged=story_merged_text,
+                    all_blueprints_text=all_blueprints_text,
+                    all_drafts_text=gather_all_drafts_text(),
+                    style_dna=st.session_state["style_dna"],
+                )
+                return llm_call(prompt, max_tokens=MAX_TOKENS_LONG)
+
+            result = run_with_status(
+                "UNIT 13 에필로그를 생성 중입니다...",
+                "UNIT 13 에필로그 생성이 완료되었습니다.",
+                _job,
             )
-            result = llm_call(prompt, max_tokens=MAX_TOKENS_LONG)
-            st.session_state["unit_drafts"][selected_unit] = ensure_final_ending(result, 13)
+            if result is not None:
+                st.session_state["unit_drafts"][selected_unit] = ensure_final_ending(result, 13)
         else:
-            prompt = build_unit_draft_prompt(
-                unit_no=unit_no,
-                working_title=working_title,
-                genre=genre,
-                format_mode=format_mode,
-                pov=pov,
-                overview=overview,
-                characters=characters,
-                synopsis=synopsis,
-                notes=notes,
-                story_reinforcement_merged=story_merged_text,
-                all_blueprints_text=all_blueprints_text,
-                previous_drafts=gather_all_drafts_text(),
-                style_dna=st.session_state["style_dna"],
-                style_strength=style_strength,
+            def _job():
+                prompt = build_unit_draft_prompt(
+                    unit_no=unit_no,
+                    working_title=working_title,
+                    genre=genre,
+                    format_mode=format_mode,
+                    pov=pov,
+                    overview=overview,
+                    characters=characters,
+                    synopsis=synopsis,
+                    notes=notes,
+                    story_reinforcement_merged=story_merged_text,
+                    all_blueprints_text=all_blueprints_text,
+                    previous_drafts=gather_all_drafts_text(),
+                    style_dna=st.session_state["style_dna"],
+                    style_strength=style_strength,
+                )
+                return llm_call(prompt, max_tokens=MAX_TOKENS_LONG)
+
+            done_msg = f"UNIT {unit_no:02d} 원고 생성이 완료되었습니다."
+            if unit_no == 12:
+                done_msg = "UNIT 12 본편 마무리 생성이 완료되었습니다."
+
+            result = run_with_status(
+                f"UNIT {unit_no:02d} 원고를 생성 중입니다...",
+                done_msg,
+                _job,
             )
-            result = llm_call(prompt, max_tokens=MAX_TOKENS_LONG)
-            st.session_state["unit_drafts"][selected_unit] = ensure_final_ending(result, unit_no)
+            if result is not None:
+                st.session_state["unit_drafts"][selected_unit] = ensure_final_ending(result, unit_no)
 
 with draft_col2:
     rewrite_mode = st.selectbox(
@@ -666,14 +724,22 @@ with draft_col2:
     if st.button("Unit 다시 쓰기", use_container_width=True):
         source_text = st.session_state["unit_drafts"].get(selected_unit, "")
         if source_text.strip():
-            prompt = build_unit_rewrite_prompt(
-                unit_no=int(selected_unit),
-                rewrite_mode=rewrite_mode,
-                source_text=source_text,
-                style_dna=st.session_state["style_dna"],
+            def _job():
+                prompt = build_unit_rewrite_prompt(
+                    unit_no=int(selected_unit),
+                    rewrite_mode=rewrite_mode,
+                    source_text=source_text,
+                    style_dna=st.session_state["style_dna"],
+                )
+                return llm_call(prompt, max_tokens=MAX_TOKENS_LONG)
+
+            result = run_with_status(
+                f"UNIT {selected_unit}를 다시 쓰는 중입니다...",
+                f"UNIT {selected_unit} 다시 쓰기가 완료되었습니다.",
+                _job,
             )
-            rewritten = llm_call(prompt, max_tokens=MAX_TOKENS_LONG)
-            st.session_state["unit_drafts"][selected_unit] = ensure_final_ending(rewritten, int(selected_unit))
+            if result is not None:
+                st.session_state["unit_drafts"][selected_unit] = ensure_final_ending(result, int(selected_unit))
 
 with draft_col3:
     st.markdown(
@@ -688,7 +754,7 @@ if current_draft:
         st.text_area("원고", value=current_draft, height=420, label_visibility="collapsed")
 
 # ─────────────────────────────────────
-# TITLE REVIEW
+# STEP 6
 # ─────────────────────────────────────
 st.markdown('<div class="section-header">STEP 6 · 가제 검토 / 제목 제안</div>', unsafe_allow_html=True)
 
@@ -696,16 +762,25 @@ title_col1, title_col2 = st.columns([1, 1])
 
 with title_col1:
     if st.button("원고 기반 제목 검토", use_container_width=True):
-        prompt = build_title_review_prompt(
-            current_title=working_title,
-            overview=overview,
-            synopsis=synopsis,
-            story_reinforcement_merged=story_merged_text,
-            all_blueprints_text=all_blueprints_text,
-            all_drafts_text=gather_all_drafts_text(),
-            style_dna=st.session_state["style_dna"],
+        def _job():
+            prompt = build_title_review_prompt(
+                current_title=working_title,
+                overview=overview,
+                synopsis=synopsis,
+                story_reinforcement_merged=story_merged_text,
+                all_blueprints_text=all_blueprints_text,
+                all_drafts_text=gather_all_drafts_text(),
+                style_dna=st.session_state["style_dna"],
+            )
+            return llm_call(prompt, max_tokens=MAX_TOKENS_MID)
+
+        result = run_with_status(
+            "원고를 다시 읽고 제목을 검토 중입니다...",
+            "제목 검토 / 대안 제안이 완료되었습니다.",
+            _job,
         )
-        st.session_state["title_review"] = llm_call(prompt, max_tokens=MAX_TOKENS_MID)
+        if result is not None:
+            st.session_state["title_review"] = result
 
 with title_col2:
     st.markdown(
@@ -718,33 +793,84 @@ if st.session_state["title_review"]:
         st.markdown(st.session_state["title_review"])
 
 # ─────────────────────────────────────
-# EXPORT
+# STEP 7
 # ─────────────────────────────────────
 st.markdown('<div class="section-header">STEP 7 · 저장 / 내보내기</div>', unsafe_allow_html=True)
 
+safe_title = safe_filename(working_title)
 manuscript = final_manuscript_text(working_title)
-txt_bytes = export_txt(manuscript)
-docx_bytes = export_docx(working_title or "Novel Draft", manuscript)
 
-safe_title = re.sub(r"[^0-9A-Za-z가-힣_-]+", "_", (working_title or "novel_draft"))
+current_unit_text = st.session_state["unit_drafts"].get(selected_unit, "").strip()
+current_unit_label = "UNIT_13_에필로그" if selected_unit == "13" else f"UNIT_{selected_unit}"
 
-exp1, exp2 = st.columns(2)
-with exp1:
+txt_bytes = export_txt(manuscript) if manuscript.strip() else b""
+docx_bytes = export_docx(working_title or "Novel Draft", manuscript) if manuscript.strip() else b""
+
+unit_txt_bytes = export_txt(current_unit_text) if current_unit_text else b""
+unit_docx_bytes = (
+    export_docx(f"{working_title or 'Novel Draft'} {current_unit_label}", current_unit_text)
+    if current_unit_text
+    else b""
+)
+
+if not manuscript.strip():
+    st.warning("아직 저장할 최종 원고가 없습니다. 먼저 Unit 원고를 생성해 주세요.")
+else:
+    st.info("다운로드 버튼을 누르면 브라우저로 바로 저장됩니다.")
+
+st.markdown("**현재 Unit 저장**")
+u1, u2 = st.columns(2)
+
+with u1:
     st.download_button(
-        "TXT 저장",
-        data=txt_bytes,
-        file_name=f"{safe_title}.txt",
+        "현재 Unit TXT 저장",
+        data=unit_txt_bytes,
+        file_name=f"{safe_title}_{current_unit_label}.txt",
         mime="text/plain",
         use_container_width=True,
+        disabled=not bool(current_unit_text),
+        key=f"download_unit_txt_{selected_unit}",
+        on_click="ignore",
     )
-with exp2:
+
+with u2:
     st.download_button(
-        "DOCX 저장",
-        data=docx_bytes,
-        file_name=f"{safe_title}.docx",
+        "현재 Unit DOCX 저장",
+        data=unit_docx_bytes,
+        file_name=f"{safe_title}_{current_unit_label}.docx",
         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         use_container_width=True,
+        disabled=not bool(current_unit_text),
+        key=f"download_unit_docx_{selected_unit}",
+        on_click="ignore",
+    )
+
+st.markdown("**최종 원고 저장**")
+exp1, exp2 = st.columns(2)
+
+with exp1:
+    st.download_button(
+        "최종 원고 TXT 저장",
+        data=txt_bytes,
+        file_name=f"{safe_title}_final.txt",
+        mime="text/plain",
+        use_container_width=True,
+        disabled=not bool(manuscript.strip()),
+        key="download_final_txt",
+        on_click="ignore",
+    )
+
+with exp2:
+    st.download_button(
+        "최종 원고 DOCX 저장",
+        data=docx_bytes,
+        file_name=f"{safe_title}_final.docx",
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        use_container_width=True,
+        disabled=not bool(manuscript.strip()),
+        key="download_final_docx",
+        on_click="ignore",
     )
 
 with st.expander("최종 원고 미리보기", expanded=False):
-    st.text_area("최종 원고", value=manuscript, height=400, label_visibility="collapsed")
+    st.text_area("최종 원고", value=manuscript, height=420, label_visibility="collapsed")

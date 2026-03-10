@@ -10,18 +10,20 @@ def clean(text: str | None) -> str:
 AUTHOR_STYLE_DNA = dedent(
     """
     [Mr.MOON STYLE DNA]
-    - 영화친화적인 상업 장편소설 톤으로 쓴다.
-    - 문장은 과하게 난해하지 않되 장면이 또렷이 보이게 쓴다.
+    - 이 작품은 영화친화적인 상업 장편소설 톤으로 쓴다.
+    - 문장은 과하게 난해하지 않되, 장면이 또렷이 보이게 쓴다.
     - 각 장면은 공간, 빛, 냄새, 소리, 촉감 중 최소 1개 이상의 감각 요소로 시작한다.
     - 세계관 설명은 요약문처럼 길게 설명하지 말고 사건, 대화, 인물 반응 속에 녹여낸다.
     - 주요 인물은 첫 등장 장면에서 직업, 결핍, 비밀, 욕망 중 최소 2개가 드러나야 한다.
     - 대사는 멋을 부리기보다 갈등, 관계 변화, 정보 전진에 기여해야 한다.
-    - 감정은 직접 말할 수 있으나 중요한 장면에서는 시선, 침묵, 몸짓, 행동으로 한 번 더 보여준다.
-    - 로맨스는 플롯과 분리하지 말고 정보 교환, 위험 노출, 계급 충돌과 함께 전진시킨다.
+    - 감정은 직접 말할 수 있으나, 중요한 장면에서는 시선, 침묵, 몸짓, 행동으로 한 번 더 보여준다.
+    - 로맨스는 플롯과 분리하지 말고, 정보 교환과 위험 노출, 계급 충돌과 함께 전진시킨다.
     - 장면 말미에는 반전, 위협, 감정 흔들림, 선택 압력 중 하나를 남겨 다음 장을 열게 만든다.
     - 작품 전체에서 감각어와 물성어를 반복 모티프로 사용해 세계관과 정서를 연결한다.
-    - 문장은 중간 길이를 기본으로 하되 전환과 충격의 순간에는 짧게 끊어 리듬을 만든다.
+    - 설명은 친절하되 평범한 해설문처럼 들리지 않게 하고, 장면화 가능한 순간으로 전환한다.
+    - 문장은 중간 길이를 기본으로 하되, 전환과 충격의 순간에는 짧게 끊어 리듬을 만든다.
     - 인물의 외형은 단순 미사여구보다 상대의 반응, 행동의 변화, 장면의 공기 속에서 드러낸다.
+    - 독자가 길을 잃지 않도록 구조는 명확하게 유지하되, 감정과 비밀의 압력은 점층적으로 높인다.
     """
 ).strip()
 
@@ -30,88 +32,104 @@ SYSTEM_PROMPT = dedent(
     f"""
     You are BLUE JEANS NOVEL ENGINE.
 
-    You are a professional long-form fiction development engine for Korean commercial novels.
-    Your role is to transform planning materials into compelling, cinematic, emotionally active prose.
+    You are a professional commercial novel development engine for long-form fiction.
+    Your task is to transform planning documents into compelling Korean popular fiction with cinematic propulsion.
 
-    Core rules:
-    - Never sound generic.
-    - Never write like a manual unless explicitly asked.
-    - Convert exposition into scene, conflict, reaction, leverage, danger, or revelation whenever possible.
-    - Keep the prose readable, visual, and commercially strong.
-    - Preserve hidden tension and character contradiction.
-    - Avoid premature closure except in the final unit or epilogue.
+    Core mission:
+    - Analyze planning materials clearly.
+    - Diagnose what is missing for long-form fiction.
+    - Reinforce the full story into a sustainable 12-unit novel structure.
+    - Draft each unit as actual prose, not summary.
+    - Maintain readability, suspense, visual immediacy, and emotional pull.
 
-    Finale rules:
-    - Unit 12 must close the main story arc decisively.
-    - If Unit 13 (Epilogue) is requested, Unit 12 should still finish the core conflict, and Unit 13 should provide emotional afterglow and final image.
-    - The final generated output of the novel must end with a standalone final line exactly: 끝.
+    Non-negotiable rules:
+    - Never sound like a manual, screenplay outline, or development memo unless the user explicitly asks for one.
+    - Never write generic AI-sounding prose.
+    - Do not flatten scenes into summary when dramatic enactment is needed.
+    - Treat each unit as real novel pages, not a synopsis.
+    - Keep the writing commercial, readable, visual, and emotionally active.
+    - Preserve character voice and hidden tension.
+    - Information must function as conflict, risk, leverage, or revelation.
+    - If exposition gets long, convert it into scene, dialogue, reaction, or action.
+
+    Length and density policy:
+    - Long-form novel scale is the goal.
+    - Each generated unit should feel materially substantial, scene-based, and expandable.
+    - Avoid premature closure.
+    - When a passage feels compressed, expand through conflict, sensory detail, character reaction, and tactical dialogue.
 
     Authorial style policy:
     {AUTHOR_STYLE_DNA}
 
     Output language:
     - Korean by default.
+    - Be clean, elegant, commercial, and vivid.
     """
 ).strip()
 
 
-STYLE_NOTE_BLOCK = dedent(
+INTAKE_TEMPLATE = dedent(
     """
-    [문체 적용 지침]
-    {style_note}
-
-    [고정 작가 문체 기준]
-    {author_style}
-    """
-).strip()
-
-
-INTAKE_BLOCK = dedent(
-    """
-    [작품 정보]
+    [작품 기본 정보]
     제목: {title}
     장르: {genre}
-    가제: {working_title}
+    문체 지향: {style_note}
 
-    [작품 개요]
+    [입력 자료]
+    작품 개요:
     {overview}
 
-    [캐릭터]
+    캐릭터:
     {characters}
 
-    [줄거리 / 트리트먼트]
+    줄거리 / 트리트먼트:
     {synopsis}
 
-    [추가 메모]
+    추가 메모:
     {extra_notes}
     """
 ).strip()
 
 
-def _base_intake(title: str, genre: str, working_title: str, overview: str, characters: str, synopsis: str, extra_notes: str) -> str:
-    return INTAKE_BLOCK.format(
-        title=clean(title) or "(미입력)",
-        genre=clean(genre) or "(미입력)",
-        working_title=clean(working_title) or "(미입력)",
-        overview=clean(overview) or "(없음)",
-        characters=clean(characters) or "(없음)",
-        synopsis=clean(synopsis) or "(없음)",
-        extra_notes=clean(extra_notes) or "(없음)",
+STYLE_APPLICATION_NOTE = dedent(
+    f"""
+    [문체 적용 지침]
+    {AUTHOR_STYLE_DNA}
+
+    [추가 작품별 문체 지시]
+    {{style_note}}
+    """
+).strip()
+
+
+def build_intake_merge_prompt(title: str, genre: str, style_note: str, chunks: list[str]) -> str:
+    overview = clean(chunks[0] if len(chunks) > 0 else "")
+    characters = clean(chunks[1] if len(chunks) > 1 else "")
+    synopsis = clean(chunks[2] if len(chunks) > 2 else "")
+    extra_notes = clean(chunks[3] if len(chunks) > 3 else "")
+
+    intake = INTAKE_TEMPLATE.format(
+        title=clean(title) or "(미정)",
+        genre=clean(genre) or "(미정)",
+        style_note=clean(style_note) or "(미정)",
+        overview=overview or "(없음)",
+        characters=characters or "(없음)",
+        synopsis=synopsis or "(없음)",
+        extra_notes=extra_notes or "(없음)",
     )
 
-
-def build_intake_merge_prompt(title: str, genre: str, working_title: str, style_note: str, overview: str, characters: str, synopsis: str, extra_notes: str) -> str:
-    intake = _base_intake(title, genre, working_title, overview, characters, synopsis, extra_notes)
-    style = STYLE_NOTE_BLOCK.format(style_note=clean(style_note) or "(없음)", author_style=AUTHOR_STYLE_DNA)
     return dedent(
         f"""
-        다음 자료를 바탕으로 장편소설 개발용 통합 분석문을 작성하라.
+        다음 자료를 하나의 장편소설 기획으로 통합 분석하라.
 
         {intake}
 
-        {style}
+        목표:
+        - 흩어진 입력 자료를 하나의 일관된 소설 기획으로 정리한다.
+        - 작품의 중심축을 선명하게 드러낸다.
+        - 아이디어 메모가 아니라 실제 장편소설 개발용 통합 문서처럼 정리한다.
 
-        출력 항목:
+        반드시 포함할 항목:
         1. 작품 한 줄 정의
         2. 작품의 핵심 매력 5가지
         3. 주인공 / 적대자 / 관계 구조 분석
@@ -122,9 +140,10 @@ def build_intake_merge_prompt(title: str, genre: str, working_title: str, style_
         8. 영상화 시 유리한 포인트
 
         작성 규칙:
-        - 추상어보다 구체어.
-        - 실제 집필과 개발에 바로 쓸 수 있는 언어로 쓸 것.
-        - Mr.MOON 스타일의 장점(장면성, 감각어, 상업성, 플롯-로맨스 결합)을 보호할 것.
+        - 명확하고 실전적인 한국어로 쓴다.
+        - 추상어보다 구체어를 쓴다.
+        - 이미 있는 장점을 잃지 않도록 보호하는 방향으로 쓴다.
+        - 문장 내내 {clean(style_note) or '상업 장편소설'} 지향을 유지한다.
         """
     ).strip()
 
@@ -132,7 +151,7 @@ def build_intake_merge_prompt(title: str, genre: str, working_title: str, style_
 def build_gap_diagnosis_prompt(title: str, genre: str, merged_summary: str) -> str:
     return dedent(
         f"""
-        아래 통합 분석을 바탕으로 이 작품이 장편소설이 되기 위해 부족한 점을 진단하라.
+        아래의 통합 분석을 바탕으로, 이 작품이 12만 자 내외 장편소설이 되기 위해 무엇이 부족한지 진단하라.
 
         [작품명] {clean(title)}
         [장르] {clean(genre)}
@@ -140,8 +159,11 @@ def build_gap_diagnosis_prompt(title: str, genre: str, merged_summary: str) -> s
         [통합 분석]
         {clean(merged_summary)}
 
-        반드시 포함할 것:
-        1. 현재 장편화에 유리한 요소
+        출력 목표:
+        - 문제를 모호하게 말하지 말고, 실제 집필 전에 보강해야 할 항목을 정확히 짚는다.
+
+        반드시 아래 구조를 따른다.
+        1. 현재 장편화에 가장 유리한 요소
         2. 부족한 점 진단
            - 주인공 욕망/결핍
            - 적대 구조
@@ -155,7 +177,8 @@ def build_gap_diagnosis_prompt(title: str, genre: str, merged_summary: str) -> s
 
         작성 규칙:
         - 막연한 조언 금지.
-        - 실제 플롯, 감정선, 정보선, 인물선이 어떻게 보강되어야 하는지 쓸 것.
+        - 실제로 플롯, 감정선, 정보선, 인물선이 어떻게 보강되어야 하는지 써라.
+        - Mr.MOON 스타일의 장점(장면성, 감각어, 상업성, 플롯-로맨스 결합)을 약화시키지 않는 방향으로 제안하라.
         """
     ).strip()
 
@@ -174,20 +197,26 @@ def build_story_reinforcement_prompt(title: str, genre: str, merged_summary: str
         [부족한 점 진단]
         {clean(gap_report)}
 
-        반드시 포함할 것:
-        1. 강화 로그라인
-        2. 시작 / 중반 / 위기 / 결전 / 결말
+        목표:
+        - 이 작품이 12개 Unit로 확장 가능한 장편소설이 되도록 전체 줄거리를 보강한다.
+        - 단순 시놉시스가 아니라, 장편 전체를 끌고 갈 수 있는 압력과 관계 변화를 설계한다.
+
+        반드시 포함할 항목:
+        1. 장편소설용 강화 로그라인
+        2. 시작 / 중반 / 위기 / 결전 / 결말의 흐름
         3. 주인공 아크
         4. 적대자 아크
         5. 관계 아크
-        6. 중반 이후 갈등 연료
-        7. 정보가 사건으로 작동하는 방식
+        6. 중반 이후 확장되는 갈등 연료
+        7. 장르 정보가 사건으로 작동하는 방식
         8. 결말의 정서적 회수
 
         작성 규칙:
-        - 장편소설의 뼈대가 되도록 설계할 것.
-        - 사건 나열이 아니라 선택의 대가와 감정 변화를 함께 쓸 것.
-        - 설명 과다 구간은 장면으로 환산 가능한 방식으로 바꿀 것.
+        - 요약문처럼 말고, 실제 소설화가 가능한 형태로 쓴다.
+        - 사건만 나열하지 말고 감정 변화와 선택의 대가를 함께 넣는다.
+        - 설명 과다 구간은 장면으로 환산 가능한 방식으로 설계한다.
+        - 정보, 시대, 세계관 요소가 감정과 분리되지 않게 한다.
+        - 상업 장편소설의 흡입력을 유지한다.
         """
     ).strip()
 
@@ -203,8 +232,13 @@ def build_unit_plan_prompt(title: str, genre: str, reinforced_story: str) -> str
         [전체 줄거리 보강]
         {clean(reinforced_story)}
 
+        목표:
+        - 총 12개 Unit으로 구성된 장편소설 구조를 만든다.
+        - 각 Unit은 약 1만 자 안팎으로 확장 가능한 밀도를 가져야 한다.
+        - 각 Unit이 독립적인 사건 기능과 감정 전환을 가지게 한다.
+
         출력 형식:
-        Unit 01 ~ Unit 12까지 각각 아래 항목을 포함한다.
+        Unit 01 ~ Unit 12까지 각각 아래 항목을 반드시 포함한다.
         - Unit 제목
         - 서사 기능
         - 핵심 사건
@@ -216,11 +250,11 @@ def build_unit_plan_prompt(title: str, genre: str, reinforced_story: str) -> str
         - 엔딩 훅
 
         추가 규칙:
-        - Unit 01은 강한 오프닝.
-        - Unit 06 전후에는 판을 흔드는 변화.
-        - Unit 08~10은 추락, 재정렬, 결전 준비.
-        - Unit 12는 본편의 메인 갈등을 완결하고 정서 회수까지 끝낼 것.
-        - 별도의 Unit 13 에필로그를 붙일 수 있으므로, Unit 12는 본편 완결 중심으로 설계할 것.
+        - Unit 01은 강한 오프닝이어야 한다.
+        - Unit 06 전후에는 판을 흔드는 변화가 있어야 한다.
+        - Unit 08~10 구간에는 추락, 재정렬, 결전 준비가 살아 있어야 한다.
+        - Unit 12는 플롯 정리뿐 아니라 정서 회수까지 포함한다.
+        - 각 Unit은 다음 Unit을 읽게 만드는 상업적 압력을 남겨야 한다.
         """
     ).strip()
 
@@ -228,35 +262,23 @@ def build_unit_plan_prompt(title: str, genre: str, reinforced_story: str) -> str
 def build_unit_draft_prompt(
     title: str,
     genre: str,
-    working_title: str,
     style_note: str,
     reinforced_story: str,
     unit_plan: str,
     unit_number: int,
     previous_unit_summary: str,
 ) -> str:
-    is_final = unit_number == 12
-    style = STYLE_NOTE_BLOCK.format(style_note=clean(style_note) or "(없음)", author_style=AUTHOR_STYLE_DNA)
-    unit_specific = dedent(
-        """
-        [최종 Unit 규칙]
-        - 이번 Unit은 Unit 12다.
-        - 메인 갈등, 핵심 비밀, 감정의 결산을 반드시 마무리한다.
-        - 끝을 흐리지 말고 서사를 명확히 닫는다.
-        - 별도 에필로그가 없더라도 독자가 완결을 느껴야 한다.
-        - 마지막 줄은 아직 `끝.` 을 쓰지 않는다. 그것은 최종 후처리 또는 에필로그에서 붙는다.
-        """
-    ).strip() if is_final else "[중간 Unit 규칙]\n- 이번 Unit은 다음 Unit으로 이어지는 압력을 남겨야 한다."
+    prev_block = clean(previous_unit_summary) or "(직전 Unit 없음)"
+    style_block = STYLE_APPLICATION_NOTE.format(style_note=clean(style_note) or "(없음)")
 
     return dedent(
         f"""
         아래 자료를 바탕으로 Unit {unit_number:02d}의 실제 소설 원고를 작성하라.
 
         [작품명] {clean(title)}
-        [가제] {clean(working_title)}
         [장르] {clean(genre)}
 
-        {style}
+        {style_block}
 
         [전체 줄거리 보강]
         {clean(reinforced_story)}
@@ -265,119 +287,124 @@ def build_unit_draft_prompt(
         {clean(unit_plan)}
 
         [직전 Unit 요약]
-        {clean(previous_unit_summary) or '(없음)'}
+        {prev_block}
 
-        {unit_specific}
+        [현재 작업]
+        Unit {unit_number:02d}
 
         집필 목표:
-        - 시놉시스가 아니라 실제 소설 원고여야 한다.
+        - 이 출력은 시놉시스가 아니라 실제 소설 원고여야 한다.
         - 장면이 보이고, 인물이 움직이고, 감정이 흔들려야 한다.
-        - 상업 장편소설답게 빠르게 읽히되 평평한 설명문으로 흐르지 말아야 한다.
+        - 상업 장편소설답게 빠르게 읽히되, 평평한 설명문으로 흘러가지 말아야 한다.
+        - 필요하면 2~4개의 소챕터 흐름을 자연스럽게 포함해도 좋다.
 
         반드시 지킬 규칙:
         1. 첫 문단부터 공간, 행동, 감각으로 시작한다.
         2. 정보를 길게 설명하지 말고 갈등과 반응 속에 녹인다.
-        3. 인물은 모순과 욕망을 가진 사람처럼 보이게 쓴다.
+        3. 인물은 기능적 도구가 아니라 모순과 욕망을 지닌 사람처럼 보이게 쓴다.
         4. 대사는 갈등, 유혹, 위협, 정보 전진 중 하나를 수행해야 한다.
         5. 중요한 감정 장면은 한 번 더 행동과 침묵으로 보여준다.
         6. 로맨스가 있다면 플롯과 함께 전진시킨다.
-        7. 장면 끝에는 다음 장 또는 결말의 압력을 남긴다.
-        8. 요약보다 장면을 우선한다.
+        7. 장면 끝에는 다음 장을 열게 하는 압력을 남긴다.
+        8. 결론을 서둘러 닫지 않는다.
+
+        분량 규칙:
+        - 충분히 실질적인 Unit 초안이 되도록 풍부하게 쓴다.
+        - 장면을 요약하지 말고 전개하라.
+        - 압축이 심해지면 감각, 반응, 대화, 갈등, 선택을 통해 확장하라.
+
+        출력 형식:
+        - 바로 소설 본문으로 시작한다.
+        - 불필요한 머리말, 해설, 분석, 번호 목록 금지.
         """
     ).strip()
 
 
-def build_epilogue_prompt(
-    title: str,
-    genre: str,
-    working_title: str,
-    style_note: str,
-    reinforced_story: str,
-    unit_plan: str,
-    final_unit_text: str,
-) -> str:
-    style = STYLE_NOTE_BLOCK.format(style_note=clean(style_note) or "(없음)", author_style=AUTHOR_STYLE_DNA)
+def build_rewrite_prompt(mode: str, text: str) -> str:
+    mode_map = {
+        "더 상업적으로": "흡입력, 가독성, 장면 추진력을 강화하라.",
+        "더 빠르게": "문장과 장면 전환 속도를 높이고 군더더기를 줄여라.",
+        "더 감정적으로": "감정의 여운과 관계의 떨림을 강화하라.",
+        "더 차갑게": "문장을 절제하고 긴장과 냉기를 강화하라.",
+        "더 스릴러답게": "위험, 추적, 의심, 반전의 압력을 높여라.",
+        "더 여성서사 중심으로": "주체성, 선택, 시선의 중심을 여성 인물에게 더 강하게 실어라.",
+        "더 영상적으로": "장면의 시각성, 동선, 현장감, 컷감 같은 리듬을 강화하라.",
+    }
+    mode_instruction = mode_map.get(clean(mode), "문체와 장면 밀도를 개선하라.")
+
     return dedent(
         f"""
-        아래 자료를 바탕으로 Unit 13 에필로그를 작성하라.
+        아래 소설 원고를 다시 써라.
 
-        [작품명] {clean(title)}
-        [가제] {clean(working_title)}
-        [장르] {clean(genre)}
+        [리라이트 방향]
+        {clean(mode)}
+        {mode_instruction}
 
-        {style}
-
-        [전체 줄거리 보강]
-        {clean(reinforced_story)}
-
-        [12 Unit 설계]
-        {clean(unit_plan)}
-
-        [Unit 12 원고]
-        {clean(final_unit_text)}
-
-        에필로그 규칙:
-        - 분량은 약 2페이지 분량의 짧고 밀도 있는 에필로그로 쓴다.
-        - 메인 갈등은 이미 끝났다고 전제하고, 정서적 여운과 최종 이미지를 제공한다.
-        - 설명으로 정리하지 말고, 마지막 장면처럼 써라.
-        - 상징어, 반복 대사, 감각 모티프가 있다면 은은하게 회수한다.
-        - 엔딩은 닫혀 있어야 한다.
-        - 마지막 줄은 반드시 단독으로 정확히 `끝.` 이라고 출력한다.
-        """
-    ).strip()
-
-
-def build_rewrite_prompt(mode: str, text: str, title: str, genre: str, style_note: str) -> str:
-    style = STYLE_NOTE_BLOCK.format(style_note=clean(style_note) or "(없음)", author_style=AUTHOR_STYLE_DNA)
-    return dedent(
-        f"""
-        아래 소설 원고를 `{clean(mode)}` 방향으로 다시 써라.
-
-        [작품명] {clean(title)}
-        [장르] {clean(genre)}
-
-        {style}
+        [유지해야 할 기본 작가 스타일]
+        {AUTHOR_STYLE_DNA}
 
         [원고]
         {clean(text)}
 
         규칙:
-        - 줄거리 자체를 바꾸기보다 문장, 장면 밀도, 감정 압력, 후킹을 조정한다.
-        - Mr.MOON 스타일 DNA를 유지한다.
-        - 평범한 AI 설명문처럼 만들지 않는다.
-        - 원고가 Unit 12 또는 에필로그라면, 완결감은 훼손하지 않는다.
+        - 줄거리의 핵심 사건은 유지한다.
+        - 원문의 장면성과 감각 모티프를 잃지 않는다.
+        - 더 강한 상업 장편소설 초안처럼 읽히게 만든다.
+        - 기계적으로 꾸미지 말고 자연스럽게 개선한다.
+        - 해설 없이 바로 수정된 소설 본문만 출력한다.
         """
     ).strip()
 
 
-def build_title_review_prompt(title: str, working_title: str, genre: str, reinforced_story: str, unit_plan: str, all_drafts_text: str) -> str:
+def build_title_review_prompt(
+    current_title: str,
+    genre: str,
+    merged_summary: str,
+    reinforced_story: str,
+    unit_plan: str,
+    drafts_text: str,
+) -> str:
     return dedent(
         f"""
-        아래 자료를 바탕으로 현재 가제를 검토하고 대안을 제안하라.
+        아래 자료를 읽고, 현재 가제가 적절한지 검토한 뒤 제목 대안을 제안하라.
 
-        [작품명] {clean(title)}
-        [현재 가제] {clean(working_title)}
-        [장르] {clean(genre)}
+        [현재 가제]
+        {clean(current_title) or '(미정)'}
+
+        [장르]
+        {clean(genre)}
+
+        [통합 분석]
+        {clean(merged_summary) or '(없음)'}
 
         [전체 줄거리 보강]
-        {clean(reinforced_story)}
+        {clean(reinforced_story) or '(없음)'}
 
         [12 Unit 설계]
-        {clean(unit_plan)}
+        {clean(unit_plan) or '(없음)'}
 
-        [생성 원고]
-        {clean(all_drafts_text)}
+        [생성된 원고 발췌]
+        {clean(drafts_text) or '(없음)'}
 
         목표:
-        - 현재 가제를 유지할지, 보강할지, 더 강한 대안을 붙일지 판단한다.
-        - 반복 대사, 상징어, 마지막 정서, 장르 톤을 함께 고려한다.
+        - 현재 가제가 작품의 핵심 정서와 상징을 제대로 담는지 평가한다.
+        - 실제 원고의 반복 대사, 상징어, 감각어, 마지막 정서까지 고려해 더 강한 제목을 제안한다.
+        - 제목은 검색성과 기억성, 장르 감각, 영상화 가능성까지 고려한다.
 
-        출력 형식:
-        1. 현재 가제 유지 여부 (유지 / 보강 / 교체 추천)
+        반드시 아래 형식으로 작성한다.
+        1. 현재 가제 유지 여부 판단
         2. 판단 이유
-        3. 대안 제목 7개
-        4. 가장 상업적인 제목 3개
-        5. 가장 영상화에 강한 제목 3개
-        6. 필요하면 부제 조합 3개
+        3. 원고 안에서 제목감이 되는 핵심 단어/대사/상징 5개
+        4. 메인 추천 제목 5개
+        5. 더 상업적인 제목 5개
+        6. 더 영상화에 강한 제목 5개
+        7. 가제 + 부제 조합 5개
+        8. 최종 1순위 추천과 이유
+
+        규칙:
+        - 흔한 제목, 너무 설명적인 제목, 장르 클리셰 제목은 피한다.
+        - 작품 안에서 살아 있는 단어를 우선한다.
+        - 한국어 제목을 기본으로 쓰고, 필요하면 괄호 안 영문 후보를 병기해도 된다.
+        - 제목만 나열하지 말고, 살아남는 이유를 짧게 덧붙인다.
         """
     ).strip()

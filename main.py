@@ -27,90 +27,142 @@ from prompt import (
 )
 
 # ─────────────────────────────────────
-# Page Config
+# CONFIG
+# ─────────────────────────────────────
+APP_TITLE = "BLUE JEANS NOVEL ENGINE"
+APP_SUB = "NOVEL WRITER STUDIO"
+
+DEFAULT_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+MAX_TOKENS_SHORT = 4000
+MAX_TOKENS_MID = 6000
+MAX_TOKENS_LONG = 8192
+
+UNIT_TARGET_LENGTHS = {
+    1: 7000, 2: 7000, 3: 8000,
+    4: 8000, 5: 8000, 6: 9000,
+    7: 9000, 8: 9000, 9: 8000,
+    10: 8000, 11: 8000, 12: 9000,
+    13: 2500,
+}
+
+UNIT_MIN_LENGTHS = {
+    1: 6000, 2: 6000, 3: 6500,
+    4: 6500, 5: 6500, 6: 7000,
+    7: 7000, 8: 7000, 9: 6500,
+    10: 6500, 11: 6500, 12: 7000,
+    13: 1800,
+}
+
+# ─────────────────────────────────────
+# PAGE
 # ─────────────────────────────────────
 st.set_page_config(
-    page_title="BLUE JEANS · Novel Engine",
+    page_title=APP_TITLE,
     page_icon="👖",
     layout="wide",
-    initial_sidebar_state="collapsed",
 )
 
 # ─────────────────────────────────────
 # CSS
 # ─────────────────────────────────────
-st.markdown("""
+st.markdown(
+    """
 <style>
 @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
 @import url('https://cdn.jsdelivr.net/gh/projectnoonnu/2408-3@latest/Paperlogy.css');
 @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&display=swap');
 
 :root {
-    --navy: #191970; --y: #FFCB05; --bg: #F7F7F5;
-    --card: #FFFFFF; --card-border: #E2E2E0; --t: #1A1A2E;
-    --g: #2EC484; --dim: #8E8E99; --light-bg: #EEEEF6;
+    --navy: #202A78;
+    --y: #FFCB05;
+    --bg: #F7F7F5;
+    --card: #FFFFFF;
+    --card-border: #DDDDE6;
+    --t: #2A2A3A;
+    --dim: #8A8FA3;
+    --light-bg: #EEEEF6;
     --display: 'Playfair Display', 'Paperlogy', 'Georgia', serif;
     --body: 'Pretendard', -apple-system, sans-serif;
     --heading: 'Paperlogy', 'Pretendard', sans-serif;
 }
 
 html, body, [class*="css"] {
-    font-family: var(--body); color: var(--t); -webkit-font-smoothing: antialiased;
+    font-family: var(--body);
+    color: var(--t);
+    -webkit-font-smoothing: antialiased;
 }
 .stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"],
 [data-testid="stMainBlockContainer"], [data-testid="stHeader"],
 [data-testid="stBottom"] {
-    background-color: var(--bg) !important; color: var(--t) !important;
+    background-color: var(--bg) !important;
+    color: var(--t) !important;
 }
 .stMarkdown, .stText, .stCode { color: var(--t) !important; }
-h1,h2,h3,h4,h5,h6 { color: var(--navy) !important; font-family: var(--heading) !important; }
-p, span, label, div, li { color: inherit; }
+h1,h2,h3,h4,h5,h6 {
+    color: var(--navy) !important;
+    font-family: var(--heading) !important;
+}
+p, span, label, div, li { color: var(--t); }
 section[data-testid="stSidebar"] { display: none; }
 
 .stTextInput input, .stTextArea textarea,
 [data-testid="stTextInput"] input, [data-testid="stTextArea"] textarea {
-    background-color: var(--card) !important; color: var(--t) !important;
-    border: 1.5px solid var(--card-border) !important; border-radius: 8px !important;
-    font-family: var(--body) !important; font-size: 0.92rem !important;
+    background-color: var(--card) !important;
+    color: var(--t) !important;
+    border: 1.5px solid var(--card-border) !important;
+    border-radius: 8px !important;
+    font-family: var(--body) !important;
+    font-size: 0.92rem !important;
     padding: 0.65rem 0.85rem !important;
 }
 .stTextInput input:focus, .stTextArea textarea:focus,
 [data-testid="stTextInput"] input:focus, [data-testid="stTextArea"] textarea:focus {
     border-color: var(--navy) !important;
-    box-shadow: 0 0 0 2px rgba(25,25,112,0.08) !important;
+    box-shadow: 0 0 0 2px rgba(32,42,120,0.08) !important;
 }
 .stTextInput input::placeholder, .stTextArea textarea::placeholder,
 [data-testid="stTextInput"] input::placeholder, [data-testid="stTextArea"] textarea::placeholder {
-    color: var(--dim) !important; font-size: 0.85rem !important;
+    color: var(--dim) !important;
+    font-size: 0.85rem !important;
 }
 .stSelectbox > div > div, [data-baseweb="select"] > div, [data-baseweb="select"] input {
-    background-color: var(--card) !important; color: var(--t) !important;
-    border-color: var(--card-border) !important; border-radius: 8px !important;
+    background-color: var(--card) !important;
+    color: var(--t) !important;
+    border-color: var(--card-border) !important;
+    border-radius: 8px !important;
 }
 [data-baseweb="popover"], [data-baseweb="menu"], [role="listbox"], [role="option"] {
-    background-color: var(--card) !important; color: var(--t) !important;
+    background-color: var(--card) !important;
+    color: var(--t) !important;
 }
 [role="option"]:hover { background-color: var(--light-bg) !important; }
 .stTextInput label, .stTextArea label, .stSelectbox label {
-    color: var(--t) !important; font-weight: 600 !important;
-    font-size: 0.82rem !important; margin-bottom: 0.3rem !important;
+    color: var(--t) !important;
+    font-weight: 600 !important;
+    font-size: 0.82rem !important;
+    margin-bottom: 0.3rem !important;
 }
-
 .stButton > button {
-    color: var(--t) !important; border: 1.5px solid var(--card-border) !important;
-    background-color: var(--card) !important; border-radius: 8px !important;
-    font-family: var(--body) !important; font-weight: 700 !important;
-    font-size: 0.88rem !important; padding: 0.55rem 1.2rem !important;
+    color: var(--t) !important;
+    border: 1.5px solid var(--card-border) !important;
+    background-color: var(--card) !important;
+    border-radius: 8px !important;
+    font-family: var(--body) !important;
+    font-weight: 700 !important;
+    font-size: 0.88rem !important;
+    padding: 0.55rem 1.2rem !important;
     transition: all 0.2s;
 }
 .stButton > button:hover {
     border-color: var(--navy) !important;
-    box-shadow: 0 2px 8px rgba(25,25,112,0.08) !important;
+    box-shadow: 0 2px 8px rgba(32,42,120,0.08) !important;
 }
 .stButton > button[kind="primary"],
 .stButton > button[data-testid="stBaseButton-primary"] {
-    background-color: var(--y) !important; color: var(--navy) !important;
-    border-color: var(--y) !important; font-weight: 800 !important;
+    background-color: var(--y) !important;
+    color: var(--navy) !important;
+    border-color: var(--y) !important;
+    font-weight: 800 !important;
 }
 .stButton > button[kind="primary"]:hover,
 .stButton > button[data-testid="stBaseButton-primary"]:hover {
@@ -118,76 +170,85 @@ section[data-testid="stSidebar"] { display: none; }
     box-shadow: 0 2px 12px rgba(255,203,5,0.3) !important;
 }
 .stDownloadButton > button {
-    color: var(--navy) !important; border: 1.5px solid var(--y) !important;
-    background-color: var(--y) !important; border-radius: 8px !important;
-    font-family: var(--body) !important; font-weight: 800 !important;
-    font-size: 0.88rem !important; padding: 0.55rem 1.2rem !important;
+    color: var(--navy) !important;
+    border: 1.5px solid var(--y) !important;
+    background-color: var(--y) !important;
+    border-radius: 8px !important;
+    font-family: var(--body) !important;
+    font-weight: 800 !important;
+    font-size: 0.88rem !important;
+    padding: 0.55rem 1.2rem !important;
 }
 .stExpander, details, details summary {
-    background-color: var(--card) !important; color: var(--t) !important;
-    border: 1px solid var(--card-border) !important; border-radius: 8px !important;
+    background-color: var(--card) !important;
+    color: var(--t) !important;
+    border: 1px solid var(--card-border) !important;
+    border-radius: 8px !important;
 }
 details[open] > div { background-color: var(--card) !important; }
-.stExpander summary, .stExpander summary span { color: var(--t) !important; }
-.stAlert { color: var(--t) !important; border-radius: 8px !important; }
-[data-testid="stVerticalBlock"], [data-testid="stHorizontalBlock"],
-[data-testid="stColumn"] { background-color: transparent !important; }
 
 .header {
-    font-size: 0.85rem; font-weight: 700; color: var(--navy);
-    letter-spacing: 0.15em; font-family: var(--heading);
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: var(--navy);
+    letter-spacing: 0.15em;
+    font-family: var(--heading);
 }
 .brand-title {
-    font-size: 2.6rem; font-weight: 900; color: var(--navy);
-    font-family: var(--display); letter-spacing: -0.02em;
-    position: relative; display: inline-block;
+    font-size: 2.6rem;
+    font-weight: 900;
+    color: var(--navy);
+    font-family: var(--display);
+    letter-spacing: -0.02em;
+    position: relative;
+    display: inline-block;
 }
 .brand-title::after {
-    content: ''; position: absolute; bottom: 2px; left: 0;
-    width: 100%; height: 4px; background: var(--y); border-radius: 2px;
+    content: '';
+    position: absolute;
+    bottom: 2px;
+    left: 0;
+    width: 100%;
+    height: 4px;
+    background: var(--y);
+    border-radius: 2px;
 }
 .sub {
-    font-size: 0.7rem; color: var(--dim); letter-spacing: 0.15em;
-    margin-top: 0.5rem; margin-bottom: 1.5rem;
+    font-size: 0.7rem;
+    color: var(--dim);
+    letter-spacing: 0.15em;
+    margin-top: 0.5rem;
+    margin-bottom: 1.5rem;
 }
 .callout {
-    background: var(--light-bg); border-left: 4px solid var(--navy);
-    padding: 0.9rem 1.1rem; margin: 0.5rem 0;
-    border-radius: 0 8px 8px 0; font-size: 0.88rem; color: var(--t);
-}
-.cl {
-    color: var(--navy); font-weight: 700; font-size: 0.72rem;
-    letter-spacing: 0.03em; margin-bottom: 0.3rem; text-transform: uppercase;
+    background: var(--light-bg);
+    border-left: 4px solid var(--navy);
+    padding: 0.9rem 1.1rem;
+    margin: 0.5rem 0;
+    border-radius: 0 8px 8px 0;
+    font-size: 0.88rem;
+    color: var(--t);
 }
 .section-header {
-    background: var(--y); color: var(--navy);
-    padding: 0.6rem 1rem; border-radius: 6px;
-    font-weight: 800; font-size: 1rem; font-family: var(--heading);
+    background: var(--y);
+    color: var(--navy);
+    padding: 0.6rem 1rem;
+    border-radius: 6px;
+    font-weight: 800;
+    font-size: 1rem;
+    font-family: var(--heading);
     margin: 1.5rem 0 0.8rem 0;
-    display: flex; justify-content: space-between; align-items: center;
-}
-.section-header .en {
-    font-family: var(--display); font-size: 0.75rem;
-    font-weight: 700; letter-spacing: 0.05em; opacity: 0.7;
 }
 .small-meta {
-    font-size: 0.78rem; color: var(--dim);
-    margin-top: -0.2rem; margin-bottom: 0.5rem;
-}
-.beat-tag {
-    background: var(--navy); color: var(--y);
-    display: inline-block; padding: 0.2rem 0.7rem;
-    border-radius: 4px; font-size: 0.78rem; font-weight: 800;
-    letter-spacing: 0.04em; margin-bottom: 0.4rem;
-}
-.act-tag {
-    background: var(--navy); color: #fff;
-    display: inline-block; padding: 0.25rem 0.8rem;
-    border-radius: 4px; font-size: 0.82rem; font-weight: 800;
-    letter-spacing: 0.06em;
+    font-size: 0.78rem;
+    color: var(--dim);
+    margin-top: -0.2rem;
+    margin-bottom: 0.5rem;
 }
 </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
 # ─────────────────────────────────────
 # STATE
@@ -226,15 +287,8 @@ def get_client() -> Optional["anthropic.Anthropic"]:
         return None
     return anthropic.Anthropic(api_key=api_key)
 
-DEFAULT_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
-MAX_TOKENS_SHORT = 3000
-MAX_TOKENS_MID = 5000
-MAX_TOKENS_LONG = 7000
 
-def llm_call(user_prompt: str, max_tokens: int | None = None) -> str:
-    if max_tokens is None:
-        max_tokens = MAX_TOKENS_MID
-
+def llm_call(user_prompt: str, max_tokens: int = MAX_TOKENS_MID) -> str:
     client = get_client()
     if client is None:
         return (
@@ -256,6 +310,7 @@ def llm_call(user_prompt: str, max_tokens: int | None = None) -> str:
         if getattr(block, "type", None) == "text":
             parts.append(block.text)
     return "\n".join(parts).strip()
+
 
 def merge_nonempty(parts: List[str], sep: str = "\n\n") -> str:
     return sep.join([p.strip() for p in parts if p and p.strip()])

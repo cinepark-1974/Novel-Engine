@@ -227,7 +227,10 @@ def get_client() -> Optional["anthropic.Anthropic"]:
     return anthropic.Anthropic(api_key=api_key)
 
 
-def llm_call(user_prompt: str, max_tokens: int = MAX_TOKENS_MID) -> str:
+def llm_call(user_prompt: str, max_tokens: int | None = None) -> str:
+    if max_tokens is None:
+        max_tokens = MAX_TOKENS_MID
+
     client = get_client()
     if client is None:
         return (

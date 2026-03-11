@@ -29,7 +29,7 @@ from prompt import (
 # ─────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────
-APP_TITLE = "BLUE JEANS NOVEL ENGINE"
+APP_TITLE = "BLUE JEANS Novel Engine"
 APP_SUB = "NOVEL WRITER STUDIO"
 
 DEFAULT_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
@@ -201,14 +201,11 @@ details[open] > div { background-color: var(--card) !important; }
     margin-bottom: 0.6rem;
 }
 .brand-title {
-    font-size: 2.8rem;
-    font-weight: 900;
+    font-size: 2.6rem; 
+    font-weight: 900; 
     color: var(--navy);
-    font-family: var(--display);
-    letter-spacing: -0.01em;
-    position: relative;
-    display: inline-block;
-    font-style: italic;
+    font-family: var(--display); letter-spacing: -0.02em;
+    position: relative; display: inline-block;
 }
 .brand-title::after {
     content: '';

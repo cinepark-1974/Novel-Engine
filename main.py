@@ -226,6 +226,10 @@ def get_client() -> Optional["anthropic.Anthropic"]:
         return None
     return anthropic.Anthropic(api_key=api_key)
 
+DEFAULT_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+MAX_TOKENS_SHORT = 3000
+MAX_TOKENS_MID = 5000
+MAX_TOKENS_LONG = 7000
 
 def llm_call(user_prompt: str, max_tokens: int | None = None) -> str:
     if max_tokens is None:
@@ -252,7 +256,6 @@ def llm_call(user_prompt: str, max_tokens: int | None = None) -> str:
         if getattr(block, "type", None) == "text":
             parts.append(block.text)
     return "\n".join(parts).strip()
-
 
 def merge_nonempty(parts: List[str], sep: str = "\n\n") -> str:
     return sep.join([p.strip() for p in parts if p and p.strip()])

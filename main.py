@@ -280,6 +280,7 @@ DEFAULT_STATE = {
         "11-12": "",
     },
     "unit_drafts": {f"{i:02d}" if i < 13 else "13": "" for i in range(1, 14)},
+    "chapter_titles": {f"{i:02d}" if i < 13 else "13": "" for i in range(1, 14)},
     "title_review": "",
     "status_message": "",
     "status_type": "info",
@@ -377,13 +378,18 @@ def gather_blueprints_text() -> str:
 
 def gather_all_drafts_text() -> str:
     drafts = st.session_state["unit_drafts"]
+    titles = st.session_state["chapter_titles"]
     merged = []
     for i in range(1, 14):
         key = f"{i:02d}" if i < 13 else "13"
         txt = drafts.get(key, "")
         if txt.strip():
-            label = "UNIT 13 · 에필로그" if i == 13 else f"UNIT {i:02d}"
-            merged.append(f"[{label}]\n{txt}")
+            ch_title = titles.get(key, "")
+            if ch_title:
+                merged.append(f"{ch_title}\n{txt}")
+            else:
+                label = "UNIT 13 · 에필로그" if i == 13 else f"UNIT {i:02d}"
+                merged.append(f"[{label}]\n{txt}")
     return merge_nonempty(merged)
 
 
@@ -406,6 +412,20 @@ def final_manuscript_text(current_title: str) -> str:
     parts = []
     if current_title.strip():
         parts.append(current_title.strip())
+
+    # 목차 생성
+    titles = st.session_state["chapter_titles"]
+    toc_lines = []
+    for i in range(1, 14):
+        key = f"{i:02d}" if i < 13 else "13"
+        ch_title = titles.get(key, "")
+        if ch_title:
+            toc_lines.append(ch_title)
+    if toc_lines:
+        toc = "— 목차 —\n" + "\n".join(toc_lines)
+        parts.append(toc)
+
+    # 본문
     drafts = gather_all_drafts_text().strip()
     if drafts:
         parts.append(drafts)
@@ -419,6 +439,19 @@ def safe_filename(name: str) -> str:
     name = (name or "novel_draft").strip()
     name = re.sub(r"[^0-9A-Za-z가-힣_-]+", "_", name)
     return name or "novel_draft"
+
+
+def parse_chapter_title(text: str) -> tuple:
+    """원고 첫 줄에서 [CHAPTER X] — 서브타이틀을 추출한다.
+    Returns (chapter_title, body) — 제목이 없으면 ("", text)"""
+    if not text or not text.strip():
+        return ("", text)
+    lines = text.strip().split("\n", 1)
+    first_line = lines[0].strip()
+    if first_line.startswith("[CHAPTER"):
+        body = lines[1].strip() if len(lines) > 1 else ""
+        return (first_line, body)
+    return ("", text.strip())
 
 
 def set_status(message: str, status_type: str = "info") -> None:
@@ -757,7 +790,10 @@ with draft_col1:
                 _job,
             )
             if result is not None:
-                st.session_state["unit_drafts"][selected_unit] = result
+                ch_title, ch_body = parse_chapter_title(result)
+                st.session_state["unit_drafts"][selected_unit] = ch_body if ch_title else result
+                if ch_title:
+                    st.session_state["chapter_titles"][selected_unit] = ch_title
         else:
             def _job():
                 prompt = build_unit_draft_prompt(
@@ -790,8 +826,12 @@ with draft_col1:
                 _job,
             )
             if result is not None:
-                st.session_state["unit_drafts"][selected_unit] = result
-                if is_incomplete_text(result, unit_no):
+                ch_title, ch_body = parse_chapter_title(result)
+                st.session_state["unit_drafts"][selected_unit] = ch_body if ch_title else result
+                if ch_title:
+                    st.session_state["chapter_titles"][selected_unit] = ch_title
+                check_text = ch_body if ch_title else result
+                if is_incomplete_text(check_text, unit_no):
                     set_status(
                         f"UNIT {unit_no:02d}는 생성되었지만 아직 짧거나 미완성일 수 있습니다. 다시 쓰기나 재생성을 권장합니다.",
                         "warning",
@@ -837,10 +877,24 @@ with draft_col3:
     )
 
 current_draft = st.session_state["unit_drafts"].get(selected_unit, "")
+current_ch_title = st.session_state["chapter_titles"].get(selected_unit, "")
 if current_draft:
-    label = "UNIT 13 · 에필로그" if selected_unit == "13" else f"UNIT {selected_unit}"
+    label = current_ch_title if current_ch_title else (
+        "UNIT 13 · 에필로그" if selected_unit == "13" else f"UNIT {selected_unit}"
+    )
     with st.expander(f"{label} 보기", expanded=True):
         st.text_area("원고", value=current_draft, height=420, label_visibility="collapsed")
+
+# 목차 미리보기
+toc_entries = []
+for i in range(1, 14):
+    key = f"{i:02d}" if i < 13 else "13"
+    ch_title = st.session_state["chapter_titles"].get(key, "")
+    if ch_title:
+        toc_entries.append(ch_title)
+if toc_entries:
+    with st.expander("📋 목차 미리보기", expanded=False):
+        st.markdown("\n\n".join(toc_entries))
 
 # ─────────────────────────────────────
 # STEP 6

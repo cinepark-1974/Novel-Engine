@@ -187,21 +187,28 @@ section[data-testid="stSidebar"] { display: none; }
 }
 details[open] > div { background-color: var(--card) !important; }
 
+.header-wrap {
+    text-align: center;
+    padding: 2.5rem 0 0.5rem 0;
+}
 .header {
-    font-size: 0.85rem;
+    font-size: 0.82rem;
     font-weight: 700;
     color: var(--navy);
-    letter-spacing: 0.15em;
-    font-family: var(--heading);
+    letter-spacing: 0.25em;
+    font-family: var(--body);
+    text-transform: uppercase;
+    margin-bottom: 0.6rem;
 }
 .brand-title {
-    font-size: 2.6rem;
+    font-size: 2.8rem;
     font-weight: 900;
     color: var(--navy);
     font-family: var(--display);
-    letter-spacing: -0.02em;
+    letter-spacing: -0.01em;
     position: relative;
     display: inline-block;
+    font-style: italic;
 }
 .brand-title::after {
     content: '';
@@ -214,17 +221,18 @@ details[open] > div { background-color: var(--card) !important; }
     border-radius: 2px;
 }
 .sub {
-    font-size: 0.7rem;
+    font-size: 0.68rem;
     color: var(--dim);
-    letter-spacing: 0.15em;
-    margin-top: 0.5rem;
-    margin-bottom: 1.5rem;
+    letter-spacing: 0.22em;
+    margin-top: 0.8rem;
+    margin-bottom: 1.8rem;
+    text-transform: uppercase;
 }
 .callout {
     background: var(--light-bg);
     border-left: 4px solid var(--navy);
     padding: 0.9rem 1.1rem;
-    margin: 0.5rem 0;
+    margin: 0.5rem 0 1.2rem 0;
     border-radius: 0 8px 8px 0;
     font-size: 0.88rem;
     color: var(--t);
@@ -238,6 +246,9 @@ details[open] > div { background-color: var(--card) !important; }
     font-size: 1rem;
     font-family: var(--heading);
     margin: 1.5rem 0 0.8rem 0;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
 }
 .small-meta {
     font-size: 0.78rem;
@@ -463,9 +474,16 @@ def generate_or_expand_unit(unit_no: int, prompt: str) -> str:
 # ─────────────────────────────────────
 # HEADER
 # ─────────────────────────────────────
-st.markdown('<div class="header">BLUE JEANS PICTURES</div>', unsafe_allow_html=True)
-st.markdown(f'<div class="brand-title">{APP_TITLE}</div>', unsafe_allow_html=True)
-st.markdown(f'<div class="sub">{APP_SUB}</div>', unsafe_allow_html=True)
+st.markdown(
+    f"""
+<div class="header-wrap">
+    <div class="header">BLUE JEANS PICTURES</div>
+    <div class="brand-title">{APP_TITLE}</div>
+    <div class="sub">YOUNG · VINTAGE · FREE · INNOVATIVE</div>
+</div>
+""",
+    unsafe_allow_html=True,
+)
 
 st.markdown(
     """
@@ -482,7 +500,7 @@ render_status()
 # ─────────────────────────────────────
 # STEP 1
 # ─────────────────────────────────────
-st.markdown('<div class="section-header">STEP 1 · 작품 자료 입력</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-header">🔥 STEP 1 · 작품 자료 입력</div>', unsafe_allow_html=True)
 
 col1, col2 = st.columns([1, 1])
 
@@ -529,7 +547,7 @@ style_sample = st.text_area(
 # ─────────────────────────────────────
 # STEP 2
 # ─────────────────────────────────────
-st.markdown('<div class="section-header">STEP 2 · 문체 / 분석</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-header">🔬 STEP 2 · 문체 / 분석</div>', unsafe_allow_html=True)
 
 c1, c2, c3 = st.columns(3)
 
@@ -595,7 +613,7 @@ if st.session_state["gap_diagnosis"]:
 # ─────────────────────────────────────
 # STEP 3
 # ─────────────────────────────────────
-st.markdown('<div class="section-header">STEP 3 · 전체 줄거리 보강 (기승전결 분할)</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-header">📖 STEP 3 · 전체 줄거리 보강 (기승전결 분할)</div>', unsafe_allow_html=True)
 
 sr_col1, sr_col2, sr_col3, sr_col4 = st.columns(4)
 
@@ -648,7 +666,7 @@ for seg in ["기", "승", "전", "결"]:
 # ─────────────────────────────────────
 # STEP 4
 # ─────────────────────────────────────
-st.markdown('<div class="section-header">STEP 4 · 12 Unit 설계 (2 Unit씩 6개 버튼)</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-header">🏗️ STEP 4 · 12 Unit 설계 (2 Unit씩 6개 버튼)</div>', unsafe_allow_html=True)
 
 bp_cols_top = st.columns(3)
 bp_cols_bottom = st.columns(3)
@@ -703,7 +721,7 @@ all_blueprints_text = gather_blueprints_text()
 # ─────────────────────────────────────
 # STEP 5
 # ─────────────────────────────────────
-st.markdown('<div class="section-header">STEP 5 · Unit 원고 생성 / 다시 쓰기</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-header">✍️ STEP 5 · Unit 원고 생성 / 다시 쓰기</div>', unsafe_allow_html=True)
 
 unit_options = [f"{i:02d}" for i in range(1, 13)] + ["13"]
 selected_unit = st.selectbox(
@@ -827,7 +845,7 @@ if current_draft:
 # ─────────────────────────────────────
 # STEP 6
 # ─────────────────────────────────────
-st.markdown('<div class="section-header">STEP 6 · 가제 검토 / 제목 제안</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-header">🏷️ STEP 6 · 가제 검토 / 제목 제안</div>', unsafe_allow_html=True)
 
 title_col1, title_col2 = st.columns([1, 1])
 
@@ -866,7 +884,7 @@ if st.session_state["title_review"]:
 # ─────────────────────────────────────
 # STEP 7
 # ─────────────────────────────────────
-st.markdown('<div class="section-header">STEP 7 · 저장 / 내보내기</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-header">💾 STEP 7 · 저장 / 내보내기</div>', unsafe_allow_html=True)
 
 safe_title = safe_filename(working_title)
 manuscript = final_manuscript_text(working_title)

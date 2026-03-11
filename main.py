@@ -201,11 +201,14 @@ details[open] > div { background-color: var(--card) !important; }
     margin-bottom: 0.6rem;
 }
 .brand-title {
-    font-size: 2.6rem; 
-    font-weight: 900; 
+    font-size: 2.8rem;
+    font-weight: 900;
     color: var(--navy);
-    font-family: var(--display); letter-spacing: -0.02em;
-    position: relative; display: inline-block;
+    font-family: var(--display);
+    letter-spacing: -0.01em;
+    position: relative;
+    display: inline-block;
+    font-style: italic;
 }
 .brand-title::after {
     content: '';
@@ -257,6 +260,7 @@ details[open] > div { background-color: var(--card) !important; }
 """,
     unsafe_allow_html=True,
 )
+
 
 # ─────────────────────────────────────
 # STATE

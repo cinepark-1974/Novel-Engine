@@ -208,7 +208,6 @@ details[open] > div { background-color: var(--card) !important; }
     letter-spacing: -0.01em;
     position: relative;
     display: inline-block;
-    font-style: italic;
 }
 .brand-title::after {
     content: '';

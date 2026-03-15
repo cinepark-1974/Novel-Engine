@@ -29,7 +29,7 @@ from prompt import (
 # ─────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────
-APP_TITLE = "BLUE JEANS NOVEL ENGINE"
+APP_TITLE = "NOVEL ENGINE"
 APP_SUB = "NOVEL WRITER STUDIO"
 
 DEFAULT_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
@@ -57,7 +57,7 @@ UNIT_MIN_LENGTHS = {
 # PAGE
 # ─────────────────────────────────────
 st.set_page_config(
-    page_title=APP_TITLE,
+    page_title="BLUE JEANS | Novel Engine",
     page_icon="👖",
     layout="wide",
 )

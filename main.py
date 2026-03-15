@@ -29,7 +29,7 @@ from prompt import (
 # ─────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────
-APP_TITLE = "BLUE JEANS Novel Engine"
+APP_TITLE = "BLUE JEANS NOVEL ENGINE"
 APP_SUB = "NOVEL WRITER STUDIO"
 
 DEFAULT_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
@@ -260,7 +260,6 @@ details[open] > div { background-color: var(--card) !important; }
 """,
     unsafe_allow_html=True,
 )
-
 
 # ─────────────────────────────────────
 # STATE

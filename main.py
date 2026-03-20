@@ -33,6 +33,7 @@ APP_TITLE = "NOVEL ENGINE"
 APP_SUB = "NOVEL WRITER STUDIO"
 
 DEFAULT_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+MODEL_OPUS = os.getenv("ANTHROPIC_MODEL_OPUS", "claude-opus-4-20250514")
 MAX_TOKENS_SHORT = 4000
 MAX_TOKENS_MID = 6000
 MAX_TOKENS_LONG = 8192
@@ -299,7 +300,7 @@ def get_client() -> Optional["anthropic.Anthropic"]:
     return anthropic.Anthropic(api_key=api_key)
 
 
-def llm_call(user_prompt: str, max_tokens: int = MAX_TOKENS_MID) -> str:
+def llm_call(user_prompt: str, max_tokens: int = MAX_TOKENS_MID, use_opus: bool = False) -> str:
     client = get_client()
     if client is None:
         return (
@@ -309,8 +310,9 @@ def llm_call(user_prompt: str, max_tokens: int = MAX_TOKENS_MID) -> str:
             + user_prompt[:4000]
         )
 
+    model = MODEL_OPUS if use_opus else DEFAULT_MODEL
     response = client.messages.create(
-        model=DEFAULT_MODEL,
+        model=model,
         max_tokens=max_tokens,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_prompt}],
@@ -486,7 +488,7 @@ def run_with_status(start_message: str, done_message: str, fn):
 
 
 def generate_or_expand_unit(unit_no: int, prompt: str) -> str:
-    result = llm_call(prompt, max_tokens=MAX_TOKENS_LONG)
+    result = llm_call(prompt, max_tokens=MAX_TOKENS_LONG, use_opus=True)
     result = ensure_final_ending(result, unit_no)
 
     if is_incomplete_text(result, unit_no):
@@ -496,7 +498,7 @@ def generate_or_expand_unit(unit_no: int, prompt: str) -> str:
             target_length=UNIT_TARGET_LENGTHS.get(unit_no, 8000),
             min_length=UNIT_MIN_LENGTHS.get(unit_no, 6000),
         )
-        extra = llm_call(expand_prompt, max_tokens=MAX_TOKENS_MID)
+        extra = llm_call(expand_prompt, max_tokens=MAX_TOKENS_MID, use_opus=True)
         result = (result.rstrip() + "\n\n" + extra.strip()).strip()
         result = ensure_final_ending(result, unit_no)
 

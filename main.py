@@ -15,6 +15,7 @@ from docx import Document
 from prompt import (
     SYSTEM_PROMPT,
     STYLE_DNA_ANALYSIS_PROMPT,
+    build_locked_block,
     build_merge_analysis_prompt,
     build_gap_diagnosis_prompt,
     build_story_reinforcement_prompt,
@@ -578,6 +579,24 @@ style_sample = st.text_area(
     placeholder="Mr.MOON이 직접 쓴 소설/산문/블로그 문장 일부",
 )
 
+lock_col1, lock_col2 = st.columns([1, 1])
+
+with lock_col1:
+    locked_text = st.text_area(
+        "🔒 LOCKED 설정 (절대 변경 불가)",
+        height=180,
+        placeholder="변경 금지 항목을 줄 단위로 입력\n예:\n- 한유진: QLCP 대표. 직책 변경 금지.\n- 마이클 모건: 적대자. 동맹으로 변경 금지.\n- 기획의도: 글로벌 금융 권력 비판이 테마에 반영되어야 함.",
+    )
+
+with lock_col2:
+    open_text = st.text_area(
+        "🔓 OPEN 설정 (창작 가능 범위)",
+        height=180,
+        placeholder="자유롭게 창작 가능한 항목\n예:\n- 캐릭터 외형, 습관, 말투 디테일은 자유롭게 확장 가능.\n- 장면별 감정 변화와 감각 묘사는 자유롭게 창작 가능.",
+    )
+
+locked_block = build_locked_block(locked_text, open_text)
+
 # ─────────────────────────────────────
 # STEP 2
 # ─────────────────────────────────────
@@ -609,6 +628,7 @@ with c2:
                 notes=notes,
                 style_dna=st.session_state["style_dna"],
                 style_strength=style_strength,
+                locked_block=locked_block,
             )
             return llm_call(prompt, max_tokens=MAX_TOKENS_MID)
         result = run_with_status("기획서 통합 분석 중입니다...", "기획서 통합 분석이 완료되었습니다.", _job)
@@ -626,6 +646,7 @@ with c3:
                 synopsis=synopsis,
                 notes=notes,
                 style_dna=st.session_state["style_dna"],
+                locked_block=locked_block,
             )
             return llm_call(prompt, max_tokens=MAX_TOKENS_MID)
         result = run_with_status("부족한 점을 진단 중입니다...", "부족한 점 진단이 완료되었습니다.", _job)
@@ -664,6 +685,7 @@ def reinforce_segment(segment_name: str):
             merged_analysis=st.session_state["merged_analysis"],
             gap_diagnosis=st.session_state["gap_diagnosis"],
             style_dna=st.session_state["style_dna"],
+            locked_block=locked_block,
         )
         return llm_call(prompt, max_tokens=MAX_TOKENS_MID)
 
@@ -719,6 +741,7 @@ def build_blueprint(group_key: str):
             synopsis=synopsis,
             notes=notes,
             style_dna=st.session_state["style_dna"],
+            locked_block=locked_block,
         )
         return llm_call(prompt, max_tokens=MAX_TOKENS_MID)
 
@@ -782,6 +805,7 @@ with draft_col1:
                     all_blueprints_text=all_blueprints_text,
                     all_drafts_text=gather_all_drafts_text(),
                     style_dna=st.session_state["style_dna"],
+                    locked_block=locked_block,
                 )
                 return generate_or_expand_unit(13, prompt)
 
@@ -814,6 +838,7 @@ with draft_col1:
                     style_strength=style_strength,
                     target_length=UNIT_TARGET_LENGTHS.get(unit_no, 8000),
                     min_length=UNIT_MIN_LENGTHS.get(unit_no, 6000),
+                    locked_block=locked_block,
                 )
                 return generate_or_expand_unit(unit_no, prompt)
 

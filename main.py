@@ -25,6 +25,9 @@ from prompt import (
     build_title_review_prompt,
     build_epilogue_prompt,
     build_expand_incomplete_unit_prompt,
+    build_ch1_stage_a_prompt,
+    build_ch1_stage_b_prompt,
+    build_ch1_stage_c_prompt,
 )
 
 # ─────────────────────────────────────
@@ -282,6 +285,9 @@ DEFAULT_STATE = {
     },
     "unit_drafts": {f"{i:02d}" if i < 13 else "13": "" for i in range(1, 14)},
     "chapter_titles": {f"{i:02d}" if i < 13 else "13": "" for i in range(1, 14)},
+    "ch1_stage_a": "",
+    "ch1_stage_b": "",
+    "ch1_stage_c": "",
     "title_review": "",
     "status_message": "",
     "status_type": "info",
@@ -900,120 +906,218 @@ selected_unit = st.selectbox(
     format_func=lambda x: "UNIT 13 · 에필로그" if x == "13" else f"UNIT {x}",
 )
 
-draft_col1, draft_col2, draft_col3 = st.columns([1, 1, 1])
+# ─── Chapter 1 다단계 생성 시스템 ───
+if selected_unit == "01":
+    st.markdown(
+        '<div class="callout" style="border-left-color:var(--y)">'
+        '<b>Chapter 1 다단계 생성</b> — 오프닝은 소설의 얼굴입니다. 3단계로 나눠서 각 단계를 확인하고 승인한 뒤 다음 단계로 넘어갑니다.'
+        '<br>Stage A: PEAK (정상) → Stage B: WORLD (전개) → Stage C: LOSS (균열)'
+        '</div>',
+        unsafe_allow_html=True,
+    )
 
-with draft_col1:
-    if st.button("Unit 원고 생성", type="primary", use_container_width=True):
-        unit_no = int(selected_unit)
+    ch1_a, ch1_b, ch1_c = st.columns(3)
 
-        if unit_no == 13:
+    with ch1_a:
+        st.markdown("**Stage A · PEAK**")
+        st.markdown('<div class="small-meta">오프닝 장면 · 음식 시그니처 · 인물 정의 · ~2000자</div>', unsafe_allow_html=True)
+        if st.button("Stage A 생성", type="primary", use_container_width=True, key="ch1_a_btn"):
             def _job():
-                prompt = build_epilogue_prompt(
-                    working_title=working_title,
-                    genre=genre,
-                    overview=overview,
-                    characters=characters,
-                    synopsis=synopsis,
-                    story_reinforcement_merged=story_merged_text,
-                    all_blueprints_text=all_blueprints_text,
-                    all_drafts_text=gather_all_drafts_text(),
-                    style_dna=st.session_state["style_dna"],
+                prompt = build_ch1_stage_a_prompt(
+                    working_title=working_title, genre=genre, format_mode=format_mode,
+                    pov=pov, overview=overview, characters=characters,
+                    synopsis=synopsis, notes=notes,
+                    style_dna=st.session_state["style_dna"], style_strength=style_strength,
                     locked_block=locked_block,
                 )
-                return generate_or_expand_unit(13, prompt)
-
-            result = run_with_status(
-                "UNIT 13 에필로그를 생성 중입니다...",
-                "UNIT 13 에필로그 생성이 완료되었습니다.",
-                _job,
-            )
+                return llm_call(prompt, max_tokens=MAX_TOKENS_MID, use_opus=True)
+            result = run_with_status("Stage A: PEAK 오프닝을 생성 중입니다...", "Stage A 생성 완료.", _job)
             if result is not None:
-                ch_title, ch_body = parse_chapter_title(result)
-                st.session_state["unit_drafts"][selected_unit] = ch_body if ch_title else result
-                if ch_title:
-                    st.session_state["chapter_titles"][selected_unit] = ch_title
-        else:
+                st.session_state["ch1_stage_a"] = result
+
+    with ch1_b:
+        st.markdown("**Stage B · WORLD**")
+        st.markdown('<div class="small-meta">세계관 · 관계 · 권력 구조를 장면 안에 · ~2500자</div>', unsafe_allow_html=True)
+        has_a = bool(st.session_state["ch1_stage_a"].strip())
+        if st.button("Stage B 생성", use_container_width=True, disabled=not has_a, key="ch1_b_btn"):
             def _job():
-                prompt = build_unit_draft_prompt(
-                    unit_no=unit_no,
-                    working_title=working_title,
-                    genre=genre,
-                    format_mode=format_mode,
-                    pov=pov,
-                    overview=overview,
-                    characters=characters,
-                    synopsis=synopsis,
-                    notes=notes,
-                    story_reinforcement_merged=story_merged_text,
-                    all_blueprints_text=all_blueprints_text,
-                    previous_drafts=gather_all_drafts_text(),
-                    style_dna=st.session_state["style_dna"],
-                    style_strength=style_strength,
-                    target_length=UNIT_TARGET_LENGTHS.get(unit_no, 8000),
-                    min_length=UNIT_MIN_LENGTHS.get(unit_no, 6000),
+                prompt = build_ch1_stage_b_prompt(
+                    working_title=working_title, genre=genre, format_mode=format_mode,
+                    pov=pov, overview=overview, characters=characters,
+                    synopsis=synopsis, notes=notes,
+                    style_dna=st.session_state["style_dna"], style_strength=style_strength,
+                    stage_a_text=st.session_state["ch1_stage_a"],
                     locked_block=locked_block,
                 )
-                return generate_or_expand_unit(unit_no, prompt)
-
-            done_msg = f"UNIT {unit_no:02d} 원고 생성이 완료되었습니다."
-            if unit_no == 12:
-                done_msg = "UNIT 12 본편 마무리 생성이 완료되었습니다."
-
-            result = run_with_status(
-                f"UNIT {unit_no:02d} 원고를 생성 중입니다...",
-                done_msg,
-                _job,
-            )
+                return llm_call(prompt, max_tokens=MAX_TOKENS_MID, use_opus=True)
+            result = run_with_status("Stage B: WORLD 전개를 생성 중입니다...", "Stage B 생성 완료.", _job)
             if result is not None:
-                ch_title, ch_body = parse_chapter_title(result)
-                st.session_state["unit_drafts"][selected_unit] = ch_body if ch_title else result
-                if ch_title:
-                    st.session_state["chapter_titles"][selected_unit] = ch_title
-                check_text = ch_body if ch_title else result
-                if is_incomplete_text(check_text, unit_no):
-                    set_status(
-                        f"UNIT {unit_no:02d}는 생성되었지만 아직 짧거나 미완성일 수 있습니다. 다시 쓰기나 재생성을 권장합니다.",
-                        "warning",
+                st.session_state["ch1_stage_b"] = result
+
+    with ch1_c:
+        st.markdown("**Stage C · LOSS**")
+        st.markdown('<div class="small-meta">균열 · 상실의 신호 · 클리프행어 · ~1500자</div>', unsafe_allow_html=True)
+        has_b = bool(st.session_state["ch1_stage_b"].strip())
+        if st.button("Stage C 생성", use_container_width=True, disabled=not has_b, key="ch1_c_btn"):
+            def _job():
+                prompt = build_ch1_stage_c_prompt(
+                    working_title=working_title, genre=genre, format_mode=format_mode,
+                    pov=pov, overview=overview, characters=characters,
+                    synopsis=synopsis, notes=notes,
+                    style_dna=st.session_state["style_dna"], style_strength=style_strength,
+                    stage_a_text=st.session_state["ch1_stage_a"],
+                    stage_b_text=st.session_state["ch1_stage_b"],
+                    locked_block=locked_block,
+                )
+                return llm_call(prompt, max_tokens=MAX_TOKENS_MID, use_opus=True)
+            result = run_with_status("Stage C: LOSS 균열을 생성 중입니다...", "Stage C 생성 완료.", _job)
+            if result is not None:
+                st.session_state["ch1_stage_c"] = result
+
+    # 각 Stage 미리보기
+    for stage_key, stage_label in [("ch1_stage_a", "Stage A · PEAK"), ("ch1_stage_b", "Stage B · WORLD"), ("ch1_stage_c", "Stage C · LOSS")]:
+        stage_text = st.session_state.get(stage_key, "")
+        if stage_text.strip():
+            with st.expander(f"{stage_label} 보기", expanded=True):
+                st.text_area(stage_label, value=stage_text, height=300, label_visibility="collapsed", key=f"preview_{stage_key}")
+
+    # 3단계 완성 시 합치기 버튼
+    all_stages_done = all(st.session_state.get(k, "").strip() for k in ["ch1_stage_a", "ch1_stage_b", "ch1_stage_c"])
+    if all_stages_done:
+        st.markdown("---")
+        if st.button("✅ Chapter 1 확정 — 3단계를 합쳐서 UNIT 01로 저장", type="primary", use_container_width=True, key="ch1_merge_btn"):
+            merged = (
+                st.session_state["ch1_stage_a"].strip()
+                + "\n\n"
+                + st.session_state["ch1_stage_b"].strip()
+                + "\n\n"
+                + st.session_state["ch1_stage_c"].strip()
+            )
+            # 챕터 제목 파싱
+            ch_title, ch_body = parse_chapter_title(merged)
+            if ch_title:
+                st.session_state["unit_drafts"]["01"] = ch_body
+                st.session_state["chapter_titles"]["01"] = ch_title
+            else:
+                st.session_state["unit_drafts"]["01"] = merged
+            set_status("Chapter 1이 확정되었습니다. UNIT 01로 저장 완료.", "success")
+
+# ─── 일반 Unit 생성 (Unit 02~13) ───
+else:
+    draft_col1, draft_col2, draft_col3 = st.columns([1, 1, 1])
+
+    with draft_col1:
+        if st.button("Unit 원고 생성", type="primary", use_container_width=True):
+            unit_no = int(selected_unit)
+
+            if unit_no == 13:
+                def _job():
+                    prompt = build_epilogue_prompt(
+                        working_title=working_title,
+                        genre=genre,
+                        overview=overview,
+                        characters=characters,
+                        synopsis=synopsis,
+                        story_reinforcement_merged=story_merged_text,
+                        all_blueprints_text=all_blueprints_text,
+                        all_drafts_text=gather_all_drafts_text(),
+                        style_dna=st.session_state["style_dna"],
+                        locked_block=locked_block,
                     )
+                    return generate_or_expand_unit(13, prompt)
 
-with draft_col2:
-    rewrite_mode = st.selectbox(
-        "다시 쓰기 모드",
-        ["더 상업적으로", "더 빠르게", "더 감정적으로", "더 차갑게", "더 영상적으로", "더 문학적으로"],
-        index=0,
-    )
-    if st.button("Unit 다시 쓰기", use_container_width=True):
-        source_text = st.session_state["unit_drafts"].get(selected_unit, "")
-        if source_text.strip():
-            def _job():
-                prompt = build_unit_rewrite_prompt(
-                    unit_no=int(selected_unit),
-                    rewrite_mode=rewrite_mode,
-                    source_text=source_text,
-                    style_dna=st.session_state["style_dna"],
-                    target_length=UNIT_TARGET_LENGTHS.get(int(selected_unit), 8000),
-                    min_length=UNIT_MIN_LENGTHS.get(int(selected_unit), 6000),
+                result = run_with_status(
+                    "UNIT 13 에필로그를 생성 중입니다...",
+                    "UNIT 13 에필로그 생성이 완료되었습니다.",
+                    _job,
                 )
-                return generate_or_expand_unit(int(selected_unit), prompt)
+                if result is not None:
+                    ch_title, ch_body = parse_chapter_title(result)
+                    st.session_state["unit_drafts"][selected_unit] = ch_body if ch_title else result
+                    if ch_title:
+                        st.session_state["chapter_titles"][selected_unit] = ch_title
+            else:
+                def _job():
+                    prompt = build_unit_draft_prompt(
+                        unit_no=unit_no,
+                        working_title=working_title,
+                        genre=genre,
+                        format_mode=format_mode,
+                        pov=pov,
+                        overview=overview,
+                        characters=characters,
+                        synopsis=synopsis,
+                        notes=notes,
+                        story_reinforcement_merged=story_merged_text,
+                        all_blueprints_text=all_blueprints_text,
+                        previous_drafts=gather_all_drafts_text(),
+                        style_dna=st.session_state["style_dna"],
+                        style_strength=style_strength,
+                        target_length=UNIT_TARGET_LENGTHS.get(unit_no, 8000),
+                        min_length=UNIT_MIN_LENGTHS.get(unit_no, 6000),
+                        locked_block=locked_block,
+                    )
+                    return generate_or_expand_unit(unit_no, prompt)
 
-            result = run_with_status(
-                f"UNIT {selected_unit}를 다시 쓰는 중입니다...",
-                f"UNIT {selected_unit} 다시 쓰기가 완료되었습니다.",
-                _job,
-            )
-            if result is not None:
-                st.session_state["unit_drafts"][selected_unit] = result
+                done_msg = f"UNIT {unit_no:02d} 원고 생성이 완료되었습니다."
+                if unit_no == 12:
+                    done_msg = "UNIT 12 본편 마무리 생성이 완료되었습니다."
 
-with draft_col3:
-    unit_num = int(selected_unit)
-    st.markdown(
-        f'<div class="small-meta">목표 분량 {UNIT_TARGET_LENGTHS.get(unit_num, 8000):,}자 / 최소 {UNIT_MIN_LENGTHS.get(unit_num, 6000):,}자</div>',
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        '<div class="small-meta">UNIT 12는 본편을 반드시 마무리합니다. UNIT 13은 선택형 에필로그입니다.</div>',
-        unsafe_allow_html=True,
-    )
+                result = run_with_status(
+                    f"UNIT {unit_no:02d} 원고를 생성 중입니다...",
+                    done_msg,
+                    _job,
+                )
+                if result is not None:
+                    ch_title, ch_body = parse_chapter_title(result)
+                    st.session_state["unit_drafts"][selected_unit] = ch_body if ch_title else result
+                    if ch_title:
+                        st.session_state["chapter_titles"][selected_unit] = ch_title
+                    check_text = ch_body if ch_title else result
+                    if is_incomplete_text(check_text, unit_no):
+                        set_status(
+                            f"UNIT {unit_no:02d}는 생성되었지만 아직 짧거나 미완성일 수 있습니다. 다시 쓰기나 재생성을 권장합니다.",
+                            "warning",
+                        )
+
+    with draft_col2:
+        rewrite_mode = st.selectbox(
+            "다시 쓰기 모드",
+            ["더 상업적으로", "더 빠르게", "더 감정적으로", "더 차갑게", "더 영상적으로", "더 문학적으로"],
+            index=0,
+        )
+        if st.button("Unit 다시 쓰기", use_container_width=True):
+            source_text = st.session_state["unit_drafts"].get(selected_unit, "")
+            if source_text.strip():
+                def _job():
+                    prompt = build_unit_rewrite_prompt(
+                        unit_no=int(selected_unit),
+                        rewrite_mode=rewrite_mode,
+                        source_text=source_text,
+                        style_dna=st.session_state["style_dna"],
+                        target_length=UNIT_TARGET_LENGTHS.get(int(selected_unit), 8000),
+                        min_length=UNIT_MIN_LENGTHS.get(int(selected_unit), 6000),
+                    )
+                    return generate_or_expand_unit(int(selected_unit), prompt)
+
+                result = run_with_status(
+                    f"UNIT {selected_unit}를 다시 쓰는 중입니다...",
+                    f"UNIT {selected_unit} 다시 쓰기가 완료되었습니다.",
+                    _job,
+                )
+                if result is not None:
+                    st.session_state["unit_drafts"][selected_unit] = result
+
+    with draft_col3:
+        unit_num = int(selected_unit)
+        st.markdown(
+            f'<div class="small-meta">목표 분량 {UNIT_TARGET_LENGTHS.get(unit_num, 8000):,}자 / 최소 {UNIT_MIN_LENGTHS.get(unit_num, 6000):,}자</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            '<div class="small-meta">UNIT 12는 본편을 반드시 마무리합니다. UNIT 13은 선택형 에필로그입니다.</div>',
+            unsafe_allow_html=True,
+        )
 
 current_draft = st.session_state["unit_drafts"].get(selected_unit, "")
 current_ch_title = st.session_state["chapter_titles"].get(selected_unit, "")

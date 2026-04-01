@@ -400,10 +400,123 @@ def export_txt(content: str) -> bytes:
 
 
 def export_docx(title: str, content: str) -> bytes:
+    """소설 포맷 DOCX 생성 — A4, 2cm 여백, 한국 소설 템플릿"""
+    from docx.shared import Pt, Cm, Twips
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+
     doc = Document()
-    doc.add_heading(title or "Novel Draft", level=1)
-    for para in content.split("\n"):
-        doc.add_paragraph(para)
+
+    # ── 페이지 설정: A4, 상하좌우 2cm ──
+    section = doc.sections[0]
+    section.page_width = Cm(21)
+    section.page_height = Cm(29.7)
+    section.top_margin = Cm(2)
+    section.bottom_margin = Cm(2)
+    section.left_margin = Cm(2)
+    section.right_margin = Cm(2)
+
+    # ── 기본 스타일 설정 ──
+    style_normal = doc.styles["Normal"]
+    style_normal.font.name = "Batang"
+    style_normal.font.size = Pt(10)
+    style_normal.paragraph_format.line_spacing = 1.6
+    style_normal.paragraph_format.space_before = Pt(0)
+    style_normal.paragraph_format.space_after = Pt(0)
+    style_normal.paragraph_format.first_line_indent = Pt(10)
+
+    # 한글 폰트 설정 (rFonts eastAsia)
+    from docx.oxml.ns import qn
+    rpr = style_normal.element.get_or_add_rPr()
+    rfonts = rpr.find(qn("w:rFonts"))
+    if rfonts is None:
+        from lxml import etree
+        rfonts = etree.SubElement(rpr, qn("w:rFonts"))
+    rfonts.set(qn("w:eastAsia"), "Batang")
+
+    # ── 내용 파싱 및 문단 생성 ──
+    lines = content.split("\n")
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+
+        # 빈 줄 = 장면 전환 (한 줄 빈 공간)
+        if not stripped:
+            p = doc.add_paragraph("")
+            p.paragraph_format.space_before = Pt(6)
+            p.paragraph_format.space_after = Pt(6)
+            p.paragraph_format.first_line_indent = Pt(0)
+            i += 1
+            # 연속 빈 줄 건너뛰기 (2개 이상의 빈 줄도 1개 빈 줄로)
+            while i < len(lines) and not lines[i].strip():
+                i += 1
+            continue
+
+        # 목차 헤더
+        if stripped == "— 목차 —":
+            p = doc.add_paragraph(stripped)
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            p.paragraph_format.space_before = Pt(24)
+            p.paragraph_format.space_after = Pt(12)
+            p.paragraph_format.first_line_indent = Pt(0)
+            run = p.runs[0] if p.runs else p.add_run(stripped)
+            run.font.size = Pt(11)
+            run.font.bold = True
+            i += 1
+            continue
+
+        # 챕터 제목: [CHAPTER X] — ...
+        if stripped.startswith("[CHAPTER"):
+            p = doc.add_paragraph(stripped)
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            p.paragraph_format.space_before = Pt(36)
+            p.paragraph_format.space_after = Pt(18)
+            p.paragraph_format.first_line_indent = Pt(0)
+            run = p.runs[0] if p.runs else p.add_run(stripped)
+            run.font.size = Pt(13)
+            run.font.bold = True
+            i += 1
+            continue
+
+        # 작품 제목 (첫 줄이 제목일 경우)
+        if i == 0 and len(stripped) < 60:
+            p = doc.add_paragraph(stripped)
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            p.paragraph_format.space_before = Pt(48)
+            p.paragraph_format.space_after = Pt(24)
+            p.paragraph_format.first_line_indent = Pt(0)
+            run = p.runs[0] if p.runs else p.add_run(stripped)
+            run.font.size = Pt(16)
+            run.font.bold = True
+            i += 1
+            continue
+
+        # "끝." 처리
+        if stripped == "끝.":
+            p = doc.add_paragraph(stripped)
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            p.paragraph_format.space_before = Pt(24)
+            p.paragraph_format.first_line_indent = Pt(0)
+            run = p.runs[0] if p.runs else p.add_run(stripped)
+            run.font.size = Pt(11)
+            i += 1
+            continue
+
+        # 목차 항목: [CHAPTER X] 형식이지만 본문 앞 목차 영역
+        if stripped.startswith("[CHAPTER") and i < 20:
+            p = doc.add_paragraph(stripped)
+            p.paragraph_format.first_line_indent = Pt(0)
+            p.paragraph_format.space_before = Pt(2)
+            p.paragraph_format.space_after = Pt(2)
+            run = p.runs[0] if p.runs else p.add_run(stripped)
+            run.font.size = Pt(10)
+            i += 1
+            continue
+
+        # 일반 본문 문단 — 들여쓰기 적용
+        p = doc.add_paragraph(stripped)
+        i += 1
+
     bio = BytesIO()
     doc.save(bio)
     bio.seek(0)

@@ -385,6 +385,7 @@ def gather_blueprints_text() -> str:
 
 
 def gather_all_drafts_text() -> str:
+    """전체 원고 — 내보내기용"""
     drafts = st.session_state["unit_drafts"]
     titles = st.session_state["chapter_titles"]
     merged = []
@@ -397,6 +398,25 @@ def gather_all_drafts_text() -> str:
                 merged.append(f"{ch_title}\n{txt}")
             else:
                 merged.append(txt)
+    return merge_nonempty(merged)
+
+
+def gather_recent_drafts(current_unit: int, window: int = 2) -> str:
+    """최근 N개 Unit 원고만 반환 — 프롬프트 컨텍스트 초과 방지"""
+    drafts = st.session_state["unit_drafts"]
+    titles = st.session_state["chapter_titles"]
+    merged = []
+    start = max(1, current_unit - window)
+    for i in range(start, current_unit):
+        key = f"{i:02d}" if i < 13 else "13"
+        txt = drafts.get(key, "")
+        if txt.strip():
+            ch_title = titles.get(key, "")
+            label = ch_title if ch_title else f"[UNIT {key}]"
+            # 마지막 2000자만 포함 (이전 Unit의 끝부분이 연결에 중요)
+            if len(txt) > 3000:
+                txt = "(...전략...)\n" + txt[-3000:]
+            merged.append(f"{label}\n{txt}")
     return merge_nonempty(merged)
 
 
@@ -1043,7 +1063,7 @@ else:
                         synopsis=synopsis,
                         story_reinforcement_merged=story_merged_text,
                         all_blueprints_text=all_blueprints_text,
-                        all_drafts_text=gather_all_drafts_text(),
+                        all_drafts_text=gather_recent_drafts(13, window=3),
                         style_dna=st.session_state["style_dna"],
                         locked_block=locked_block,
                     )
@@ -1073,7 +1093,7 @@ else:
                         notes=notes,
                         story_reinforcement_merged=story_merged_text,
                         all_blueprints_text=all_blueprints_text,
-                        previous_drafts=gather_all_drafts_text(),
+                        previous_drafts=gather_recent_drafts(unit_no),
                         style_dna=st.session_state["style_dna"],
                         style_strength=style_strength,
                         target_length=UNIT_TARGET_LENGTHS.get(unit_no, 8000),

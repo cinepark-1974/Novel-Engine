@@ -396,42 +396,74 @@ def gather_all_drafts_text() -> str:
             if ch_title:
                 merged.append(f"{ch_title}\n{txt}")
             else:
-                label = "UNIT 13 · 에필로그" if i == 13 else f"UNIT {i:02d}"
-                merged.append(f"[{label}]\n{txt}")
+                merged.append(txt)
     return merge_nonempty(merged)
 
 
 def export_txt(content: str) -> bytes:
-    return content.encode("utf-8")
+    return export_clean_content(content).encode("utf-8")
+
+
+def export_clean_content(content: str) -> str:
+    """최종 원고에서 내부 마커를 제거하고 소설 포맷으로 정리"""
+    import re
+    lines = content.split("\n")
+    cleaned = []
+    for line in lines:
+        s = line.strip()
+        # 내부 라벨 제거
+        if s.startswith("[UNIT ") and s.endswith("]"):
+            continue
+        # Stage A/B/C 내부 라벨 제거
+        if s.startswith("# Chapter") and ("Stage A" in s or "Stage B" in s or "Stage C" in s):
+            continue
+        if s.startswith("# Chapter") and "Unit" in s:
+            continue
+        if s.startswith("## ") or s.startswith("### "):
+            continue
+        # markdown # CHAPTER → [CHAPTER] 변환
+        m = re.match(r"^#\s*(CHAPTER\s*\d+)\s*[—\-]\s*(.+)$", s)
+        if m:
+            cleaned.append(f"[{m.group(1)}] — {m.group(2)}")
+            continue
+        # 기타 markdown # 헤더 → 일반 텍스트
+        if s.startswith("# "):
+            cleaned.append(s[2:])
+            continue
+        cleaned.append(line)
+    return "\n".join(cleaned)
 
 
 def export_docx(title: str, content: str) -> bytes:
-    """소설 포맷 DOCX 생성 — A4, 2cm 여백, 한국 소설 템플릿"""
-    from docx.shared import Pt, Cm, Twips
+    """한국 소설 원고 표준 DOCX — MS Word 소설 원고 포맷"""
+    from docx.shared import Pt, Cm
     from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.oxml.ns import qn
+
+    content = export_clean_content(content)
 
     doc = Document()
 
-    # ── 페이지 설정: A4, 상하좌우 2cm ──
+    # ── 페이지: A4, 여백 (상 3cm, 하좌우 2.54cm) ──
     section = doc.sections[0]
     section.page_width = Cm(21)
     section.page_height = Cm(29.7)
-    section.top_margin = Cm(2)
-    section.bottom_margin = Cm(2)
-    section.left_margin = Cm(2)
-    section.right_margin = Cm(2)
+    section.top_margin = Cm(3)
+    section.bottom_margin = Cm(2.54)
+    section.left_margin = Cm(2.54)
+    section.right_margin = Cm(2.54)
 
-    # ── 기본 스타일 설정 ──
+    # ── 기본 스타일: 바탕 10pt, 줄간격 160%, 양쪽정렬, 첫 줄 들여쓰기 1글자 ──
     style_normal = doc.styles["Normal"]
     style_normal.font.name = "Batang"
     style_normal.font.size = Pt(10)
     style_normal.paragraph_format.line_spacing = 1.6
     style_normal.paragraph_format.space_before = Pt(0)
     style_normal.paragraph_format.space_after = Pt(0)
-    style_normal.paragraph_format.first_line_indent = Pt(10)
+    style_normal.paragraph_format.first_line_indent = Cm(0.35)
+    style_normal.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
 
-    # 한글 폰트 설정 (rFonts eastAsia)
-    from docx.oxml.ns import qn
+    # 한글 폰트 (eastAsia)
     rpr = style_normal.element.get_or_add_rPr()
     rfonts = rpr.find(qn("w:rFonts"))
     if rfonts is None:
@@ -439,88 +471,91 @@ def export_docx(title: str, content: str) -> bytes:
         rfonts = etree.SubElement(rpr, qn("w:rFonts"))
     rfonts.set(qn("w:eastAsia"), "Batang")
 
-    # ── 내용 파싱 및 문단 생성 ──
+    # ── 헬퍼 ──
+    def add_normal(text):
+        return doc.add_paragraph(text)
+
+    def add_dialogue(text):
+        """대화문 — 들여쓰기 없음"""
+        p = doc.add_paragraph(text)
+        p.paragraph_format.first_line_indent = Cm(0)
+        return p
+
+    def add_centered(text, size=10, bold=False, before=0, after=0):
+        p = doc.add_paragraph(text)
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        p.paragraph_format.first_line_indent = Cm(0)
+        p.paragraph_format.space_before = Pt(before)
+        p.paragraph_format.space_after = Pt(after)
+        if p.runs:
+            p.runs[0].font.size = Pt(size)
+            p.runs[0].font.bold = bold
+
+    def add_scene_break():
+        """장면 전환 — 빈 줄 1개"""
+        p = doc.add_paragraph("")
+        p.paragraph_format.space_before = Pt(0)
+        p.paragraph_format.space_after = Pt(0)
+        p.paragraph_format.first_line_indent = Cm(0)
+
+    def add_page_break():
+        """페이지 나누기"""
+        from docx.oxml.ns import qn as _qn
+        p = doc.add_paragraph()
+        run = p.add_run()
+        br = run._element.makeelement(_qn('w:br'), {_qn('w:type'): 'page'})
+        run._element.append(br)
+        p.paragraph_format.space_before = Pt(0)
+        p.paragraph_format.space_after = Pt(0)
+
+    # ── 파싱 ──
     lines = content.split("\n")
     i = 0
-    while i < len(lines):
-        line = lines[i]
-        stripped = line.strip()
+    is_first_line = True
+    chapter_count = 0
 
-        # 빈 줄 = 장면 전환 (한 줄 빈 공간)
-        if not stripped:
-            p = doc.add_paragraph("")
-            p.paragraph_format.space_before = Pt(6)
-            p.paragraph_format.space_after = Pt(6)
-            p.paragraph_format.first_line_indent = Pt(0)
+    while i < len(lines):
+        s = lines[i].strip()
+
+        # 빈 줄 = 장면 전환
+        if not s:
+            add_scene_break()
             i += 1
-            # 연속 빈 줄 건너뛰기 (2개 이상의 빈 줄도 1개 빈 줄로)
             while i < len(lines) and not lines[i].strip():
                 i += 1
             continue
 
-        # 목차 헤더
-        if stripped == "— 목차 —":
-            p = doc.add_paragraph(stripped)
-            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            p.paragraph_format.space_before = Pt(24)
-            p.paragraph_format.space_after = Pt(12)
-            p.paragraph_format.first_line_indent = Pt(0)
-            run = p.runs[0] if p.runs else p.add_run(stripped)
-            run.font.size = Pt(11)
-            run.font.bold = True
+        # 작품 제목 (첫 줄)
+        if is_first_line and len(s) < 80:
+            add_centered(s, size=16, bold=True, before=72, after=24)
+            is_first_line = False
             i += 1
             continue
+        is_first_line = False
 
         # 챕터 제목: [CHAPTER X] — ...
-        if stripped.startswith("[CHAPTER"):
-            p = doc.add_paragraph(stripped)
-            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            p.paragraph_format.space_before = Pt(36)
-            p.paragraph_format.space_after = Pt(18)
-            p.paragraph_format.first_line_indent = Pt(0)
-            run = p.runs[0] if p.runs else p.add_run(stripped)
-            run.font.size = Pt(13)
-            run.font.bold = True
+        if s.startswith("[CHAPTER"):
+            if chapter_count > 0:
+                add_page_break()
+            add_centered(s, size=14, bold=True, before=36, after=18)
+            chapter_count += 1
             i += 1
             continue
 
-        # 작품 제목 (첫 줄이 제목일 경우)
-        if i == 0 and len(stripped) < 60:
-            p = doc.add_paragraph(stripped)
-            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            p.paragraph_format.space_before = Pt(48)
-            p.paragraph_format.space_after = Pt(24)
-            p.paragraph_format.first_line_indent = Pt(0)
-            run = p.runs[0] if p.runs else p.add_run(stripped)
-            run.font.size = Pt(16)
-            run.font.bold = True
+        # "끝."
+        if s == "끝.":
+            add_centered(s, size=11, bold=False, before=18, after=0)
             i += 1
             continue
 
-        # "끝." 처리
-        if stripped == "끝.":
-            p = doc.add_paragraph(stripped)
-            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            p.paragraph_format.space_before = Pt(24)
-            p.paragraph_format.first_line_indent = Pt(0)
-            run = p.runs[0] if p.runs else p.add_run(stripped)
-            run.font.size = Pt(11)
+        # 대화문 — 따옴표로 시작하면 들여쓰기 없음
+        if s.startswith('"') or s.startswith('\u201c') or s.startswith('\u300c') or s.startswith("'"):
+            add_dialogue(s)
             i += 1
             continue
 
-        # 목차 항목: [CHAPTER X] 형식이지만 본문 앞 목차 영역
-        if stripped.startswith("[CHAPTER") and i < 20:
-            p = doc.add_paragraph(stripped)
-            p.paragraph_format.first_line_indent = Pt(0)
-            p.paragraph_format.space_before = Pt(2)
-            p.paragraph_format.space_after = Pt(2)
-            run = p.runs[0] if p.runs else p.add_run(stripped)
-            run.font.size = Pt(10)
-            i += 1
-            continue
-
-        # 일반 본문 문단 — 들여쓰기 적용
-        p = doc.add_paragraph(stripped)
+        # 일반 본문 — 들여쓰기 적용 (기본 스타일)
+        add_normal(s)
         i += 1
 
     bio = BytesIO()
@@ -533,18 +568,6 @@ def final_manuscript_text(current_title: str) -> str:
     parts = []
     if current_title.strip():
         parts.append(current_title.strip())
-
-    # 목차 생성
-    titles = st.session_state["chapter_titles"]
-    toc_lines = []
-    for i in range(1, 14):
-        key = f"{i:02d}" if i < 13 else "13"
-        ch_title = titles.get(key, "")
-        if ch_title:
-            toc_lines.append(ch_title)
-    if toc_lines:
-        toc = "— 목차 —\n" + "\n".join(toc_lines)
-        parts.append(toc)
 
     # 본문
     drafts = gather_all_drafts_text().strip()
@@ -1127,17 +1150,6 @@ if current_draft:
     )
     with st.expander(f"{label} 보기", expanded=True):
         st.text_area("원고", value=current_draft, height=420, label_visibility="collapsed")
-
-# 목차 미리보기
-toc_entries = []
-for i in range(1, 14):
-    key = f"{i:02d}" if i < 13 else "13"
-    ch_title = st.session_state["chapter_titles"].get(key, "")
-    if ch_title:
-        toc_entries.append(ch_title)
-if toc_entries:
-    with st.expander("📋 목차 미리보기", expanded=False):
-        st.markdown("\n\n".join(toc_entries))
 
 # ─────────────────────────────────────
 # STEP 6

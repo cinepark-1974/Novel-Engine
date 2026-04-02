@@ -430,6 +430,8 @@ LOSS가 드러내는 진짜 결핍이 작품 전체의 서사 동력이 된다.
    - 액션: 전투 전 마지막 식사 = 생존 의지
 
 5. 금지 사항:
+   - ★ Chapter 1에서 회상(flashback)은 절대 금지. 과거 회상, 과거 시제 서술 블록, 어린 시절 회상, 과거 사건 설명 — 전부 금지. Chapter 1은 오직 현재다. ★
+   - 인물의 과거 정보가 필요하면 현재 행동/대사/사물 속에 1줄로 암시할 것. 회상 블록으로 풀지 마라.
    - 요리를 과잉 비유의 소재로 쓰지 마라
    - 인물 외형 묘사를 요리 장면 안에 블록으로 넣지 마라
    - LOSS 없이 PEAK만으로 Chapter 1을 끝내지 마라
@@ -859,3 +861,159 @@ def build_title_review_prompt(current_title,overview,synopsis,story_reinforcemen
 [전체 Unit 설계] {all_blueprints_text}
 [생성 원고] {all_drafts_text}
 [STYLE DNA] {style_dna}""".strip()
+
+
+# =================================================================
+# [10] CHAPTER 1 다단계 생성 — 3 STAGE SYSTEM
+# =================================================================
+
+def build_ch1_stage_a_prompt(working_title,genre,format_mode,pov,overview,characters,synopsis,notes,style_dna,style_strength,locked_block=""):
+    """Stage A: PEAK — 오프닝 장면 (음식 시그니처 + 인물 정의 + 감각 + 정상)"""
+    gk = detect_genre_key(genre)
+    r = GENRE_RULES.get(gk, GENRE_RULES["미지정"])
+    return f"""다음 작품의 Chapter 1 오프닝 장면(Stage A: PEAK)만 작성하라.
+
+이것은 Chapter 1의 첫 부분이다. 전체 챕터가 아니라 오프닝 장면만 쓴다.
+
+{CHAPTER_ONE_OPENING_RULE}
+
+[이 단계의 목표]
+- 주인공이 정상(PEAK)에 있는 상태를 보여준다
+- 독자가 이 인물에게 매혹되어야 한다
+- 음식을 만들거나 다루는 행위로 시작한다
+- 요리 방식이 인물의 성격/능력/통제력을 정의한다
+- 감각 채널 3개 이상을 연다
+- 가진 것을 구체적으로 보여준다: 능력, 성취, 관계, 쾌락, 공간
+
+[분량]
+- 약 2000~2500자
+- 서문이나 메타 설명 없이 바로 소설 본문부터 시작할 것
+
+[금지]
+- 이 단계에서 균열(LOSS)을 시작하지 마라. 그건 Stage C에서 한다.
+- 인물 외형 묘사를 블록으로 넣지 마라. 행동 속에 녹여라.
+- 배경 설명을 직접 서술하지 마라. 장면 속에 녹여라.
+
+[장르적 재미]
+{r['genre_fun']}
+Hook 규칙: {r['hook_rule']}
+
+{PACING_RULES_BLOCK}
+
+{locked_block}
+
+[가제] {working_title}
+[장르] {genre}
+[형식] {format_mode}
+[시점] {pov}
+[작품 개요] {overview}
+[캐릭터] {characters}
+[줄거리 / 트리트먼트] {synopsis}
+[추가 메모] {notes}
+
+{_style_block(style_dna, style_strength)}""".strip()
+
+
+def build_ch1_stage_b_prompt(working_title,genre,format_mode,pov,overview,characters,synopsis,notes,style_dna,style_strength,stage_a_text="",locked_block=""):
+    """Stage B: WORLD — 전개 (세계관, 관계, 권력을 장면 안에)"""
+    gk = detect_genre_key(genre)
+    r = GENRE_RULES.get(gk, GENRE_RULES["미지정"])
+    return f"""다음은 Chapter 1의 Stage A(오프닝 장면)이다. 이어서 Stage B(전개)만 작성하라.
+
+[Stage A 원고 — 이미 작성됨. 이 뒤에 이어서 쓴다.]
+{stage_a_text}
+
+[이 단계의 목표]
+- Stage A에서 보여준 인물의 PEAK를 더 깊이 전개한다
+- 세계관, 권력 구조, 핵심 관계를 대화와 행동 속에 녹여서 보여준다
+- 설명이 아니라 장면으로: 배경 정보는 갈등, 대화, 행동 안에 배치
+- 주인공의 능력, 지위, 관계가 구체적 장면으로 드러나야 한다
+- 독자가 이 세계와 인물에 완전히 몰입하게 만든다
+- 필요하면 핵심 조연/적대자를 등장시키거나 암시한다
+
+[분량]
+- 약 2500~3000자
+- Stage A에서 바로 이어지는 톤과 시점을 유지할 것
+- Stage A 텍스트를 반복하지 말고 바로 이어서 쓸 것
+
+[금지]
+- ★ 회상(flashback) 절대 금지. 과거 시제 서술 블록, 어린 시절 회상, "~했었다"로 시작하는 과거 설명 전부 금지. Chapter 1은 오직 현재다. ★
+- Stage A를 요약하거나 반복하지 마라
+- 정보를 대사로 운반하지 마라 (데이비드: "당신 회사 이름이 뭐였지?" 같은 설명용 대사 금지)
+- 이 단계에서 균열(LOSS)을 시작하지 마라
+- 인물의 과거 정보가 필요하면 현재 행동/대사/사물 속에 1줄로 암시할 것. 회상 블록으로 풀지 마라.
+
+[장르적 재미]
+{r['genre_fun']}
+
+{PACING_RULES_BLOCK}
+
+{locked_block}
+
+[가제] {working_title}
+[장르] {genre}
+[형식] {format_mode}
+[시점] {pov}
+[작품 개요] {overview}
+[캐릭터] {characters}
+[줄거리 / 트리트먼트] {synopsis}
+[추가 메모] {notes}
+
+{_style_block(style_dna, style_strength)}""".strip()
+
+
+def build_ch1_stage_c_prompt(working_title,genre,format_mode,pov,overview,characters,synopsis,notes,style_dna,style_strength,stage_a_text="",stage_b_text="",locked_block=""):
+    """Stage C: LOSS — 균열 (상실의 신호 + 클리프행어)"""
+    gk = detect_genre_key(genre)
+    r = GENRE_RULES.get(gk, GENRE_RULES["미지정"])
+    return f"""다음은 Chapter 1의 Stage A(오프닝)과 Stage B(전개)이다. 이어서 Stage C(균열)만 작성하라.
+이것이 Chapter 1의 마지막 부분이다.
+
+[Stage A + B 원고 — 이미 작성됨. 이 뒤에 이어서 쓴다.]
+{stage_a_text}
+
+{stage_b_text}
+
+[이 단계의 목표]
+- PEAK가 무너지는 순간을 쓴다. LOSS의 시작.
+- 가진 것이 위협받는 구체적 신호: 전화, 뉴스, 발견, 방문자, 실수
+- 상실은 구체적이어야 한다: 돈, 지위, 안전, 관계, 자유 중 하나 이상이 직접적으로 위협
+- PEAK에서 보여준 것의 이면에 숨은 결핍(LACK)을 암시한다 (완전히 드러낼 필요는 없다)
+- Chapter 1의 마지막 줄은 반드시 클리프행어로 끝난다
+
+[클리프행어]
+{CLIFFHANGER_RULES_BLOCK}
+- 이 Chapter는 C1(위협), C2(질문), C4(반전), C5(도착) 중 하나로 끝나야 한다
+- "그리고 밤이 깊어갔다" 같은 분위기 마무리 절대 금지
+
+[분량]
+- 약 1500~2000자
+- Stage B에서 바로 이어지는 톤과 시점을 유지할 것
+- Stage A, B 텍스트를 반복하지 말고 바로 이어서 쓸 것
+
+[금지]
+- Stage A, B를 요약하거나 반복하지 마라
+- 균열이 시작된 뒤 바로 해결하지 마라. 질문만 열어라.
+- '끝.'을 붙이지 마라. Chapter 1은 본편의 마지막이 아니다.
+
+[정보 레이어]
+{INFORMATION_LAYER_BLOCK}
+- 이 Stage에서 독자에게 공개되는 핵심 정보는 최대 1개
+- 동시에 새 질문을 최소 1개 열어야 한다
+
+[장르적 재미]
+{r['genre_fun']}
+Punch 규칙: {r['punch_rule']}
+
+{locked_block}
+
+[가제] {working_title}
+[장르] {genre}
+[형식] {format_mode}
+[시점] {pov}
+[작품 개요] {overview}
+[캐릭터] {characters}
+[줄거리 / 트리트먼트] {synopsis}
+[추가 메모] {notes}
+
+{_style_block(style_dna, style_strength)}""".strip()

@@ -451,7 +451,34 @@ def export_clean_content(content: str) -> str:
             cleaned.append(s[2:])
             continue
         cleaned.append(line)
-    return "\n".join(cleaned)
+
+    result = "\n".join(cleaned)
+
+    # ── 곧은 따옴표 → 둥근 따옴표 변환 ──
+    # 큰따옴표: " → " / "
+    result = re.sub(r'(?<=^)"', '\u201c', result, flags=re.MULTILINE)       # 줄 시작의 "
+    result = re.sub(r'(?<=\s)"', '\u201c', result)                          # 공백 뒤의 "
+    result = re.sub(r'"(?=\s)', '\u201d', result)                           # 공백 앞의 "
+    result = re.sub(r'"(?=[.,!?\n])', '\u201d', result)                     # 구두점 앞의 "
+    result = re.sub(r'"(?=$)', '\u201d', result, flags=re.MULTILINE)        # 줄 끝의 "
+    # 남은 곧은 큰따옴표 처리 (짝 맞추기)
+    remaining = []
+    is_open = True
+    for ch in result:
+        if ch == '"':
+            remaining.append('\u201c' if is_open else '\u201d')
+            is_open = not is_open
+        else:
+            remaining.append(ch)
+    result = "".join(remaining)
+
+    # 작은따옴표: ' → ' / '  (대화 안 인용 등)
+    result = result.replace("\u2018", "\u2018").replace("\u2019", "\u2019")  # 이미 둥근이면 유지
+    # 곧은 작은따옴표는 한국 소설에서 거의 안 쓰이므로 최소 처리
+    result = re.sub(r"(?<=\s)'", '\u2018', result)
+    result = re.sub(r"'(?=[\s.,!?])", '\u2019', result)
+
+    return result
 
 
 def export_docx(title: str, content: str) -> bytes:

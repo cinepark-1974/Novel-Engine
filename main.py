@@ -290,6 +290,7 @@ DEFAULT_STATE = {
     "ch1_stage_c": "",
     "unit_summaries": {},
     "quality_report": {},
+    "character_tracker": {},
     "title_review": "",
     "status_message": "",
     "status_type": "info",
@@ -482,6 +483,67 @@ def gather_all_summaries() -> str:
         if s:
             lines.append(f"[UNIT {key} 요약] {s}")
     return "\n".join(lines)
+
+
+# ─────────────────────────────────────
+# 캐릭터 등장 추적
+# ─────────────────────────────────────
+def extract_characters_from_text(text: str) -> str:
+    """Unit 원고에서 등장 인물 목록을 추출한다."""
+    client = get_client()
+    if not client or not text or not text.strip():
+        return ""
+    try:
+        resp = client.messages.create(
+            model=os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-20250514"),
+            max_tokens=300,
+            messages=[{
+                "role": "user",
+                "content": (
+                    "다음 소설 원고에서 등장하는 인물의 이름만 쉼표로 구분해서 나열하라. "
+                    "이름만 출력하고 다른 말은 하지 마라. 이름이 없으면 '없음'.\n\n"
+                    f"{text[:4000]}"
+                ),
+            }],
+        )
+        return resp.content[0].text.strip()
+    except Exception:
+        return ""
+
+
+def track_characters(unit_key: str, text: str):
+    """캐릭터 등장을 추적하고 세션에 저장한다."""
+    if "character_tracker" not in st.session_state:
+        st.session_state["character_tracker"] = {}
+    names_str = extract_characters_from_text(text)
+    if names_str and names_str != "없음":
+        names = [n.strip() for n in names_str.split(",") if n.strip()]
+        st.session_state["character_tracker"][unit_key] = names
+
+
+def get_character_report() -> dict:
+    """캐릭터 등장 추적 리포트를 생성한다."""
+    tracker = st.session_state.get("character_tracker", {})
+    if not tracker:
+        return {}
+    first_appearance = {}
+    all_chars = set()
+    for key in sorted(tracker.keys()):
+        for name in tracker[key]:
+            all_chars.add(name)
+            if name not in first_appearance:
+                first_appearance[name] = key
+    # 입력된 캐릭터 목록과 비교
+    input_chars = st.session_state.get("characters", "")
+    warnings = []
+    for name, unit in first_appearance.items():
+        if unit != "01" and name not in input_chars:
+            warnings.append(f"⚠️ '{name}' — UNIT {unit}에서 처음 등장. STEP 1 캐릭터 입력에 없는 인물.")
+    return {
+        "first_appearance": first_appearance,
+        "warnings": warnings,
+        "total": len(all_chars),
+    }
 
 
 def get_story_reinforcement_text() -> str:
@@ -1214,6 +1276,8 @@ if selected_unit == "01":
                 if "unit_summaries" not in st.session_state:
                     st.session_state["unit_summaries"] = {}
                 st.session_state["unit_summaries"]["01"] = summary
+            # 캐릭터 등장 추적
+            track_characters("01", final_text)
 
 # ─── 일반 Unit 생성 (Unit 02~13) ───
 else:
@@ -1301,6 +1365,8 @@ else:
                         if "unit_summaries" not in st.session_state:
                             st.session_state["unit_summaries"] = {}
                         st.session_state["unit_summaries"][selected_unit] = summary
+                    # 캐릭터 등장 추적
+                    track_characters(selected_unit, check_text)
 
     with draft_col2:
         rewrite_mode = st.selectbox(
@@ -1380,6 +1446,19 @@ if filled:
     with st.expander("📋 Unit 요약 (전체 흐름)", expanded=False):
         for key in sorted(filled.keys()):
             st.markdown(f"**UNIT {key}**: {filled[key]}")
+
+# 캐릭터 등장 추적 표시
+char_report = get_character_report()
+if char_report.get("first_appearance"):
+    with st.expander(f"👥 캐릭터 등장 추적 ({char_report.get('total', 0)}명)", expanded=False):
+        fa = char_report["first_appearance"]
+        for name in sorted(fa.keys(), key=lambda x: fa[x]):
+            st.markdown(f"- **{name}** — 첫 등장: UNIT {fa[name]}")
+        warnings = char_report.get("warnings", [])
+        if warnings:
+            st.markdown("---")
+            for w in warnings:
+                st.warning(w)
 
 # ─────────────────────────────────────
 # STEP 6

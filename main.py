@@ -288,6 +288,8 @@ DEFAULT_STATE = {
     "ch1_stage_a": "",
     "ch1_stage_b": "",
     "ch1_stage_c": "",
+    "unit_summaries": {},
+    "quality_report": {},
     "title_review": "",
     "status_message": "",
     "status_type": "info",
@@ -363,6 +365,125 @@ def is_incomplete_text(text: str, unit_no: int) -> bool:
     return False
 
 
+# ─────────────────────────────────────
+# 품질 자동 체크 (생성 후 즉시 경고)
+# ─────────────────────────────────────
+def analyze_unit_quality(text: str) -> dict:
+    """생성된 Unit 원고의 품질 문제를 자동 감지한다."""
+    import re
+    if not text or not text.strip():
+        return {}
+
+    issues = []
+    stats = {}
+
+    # ── 종결어미 반복 ──
+    cnt_isseotda = len(re.findall(r"있었다", text))
+    cnt_geosieotda = len(re.findall(r"것이었다", text))
+    stats["있었다"] = cnt_isseotda
+    stats["것이었다"] = cnt_geosieotda
+    if cnt_isseotda > 15:
+        issues.append(f"⚠️ '있었다' {cnt_isseotda}회 — 15회 이하로 줄이세요. 구체적 동사로 대체.")
+    if cnt_geosieotda > 3:
+        issues.append(f"⚠️ '것이었다' 해설체 {cnt_geosieotda}회 — 3회 이하로.")
+
+    # ── 대사 태그 반복 ──
+    cnt_said = len(re.findall(r"말했다", text))
+    cnt_asked = len(re.findall(r"물었다", text))
+    cnt_answered = len(re.findall(r"대답했다", text))
+    tag_total = cnt_said + cnt_asked + cnt_answered
+    stats["대사태그 합계"] = tag_total
+    if tag_total > 12:
+        issues.append(f"⚠️ 대사 태그(말했다/물었다/대답했다) {tag_total}회 — 행동 태그로 대체하세요.")
+
+    # ── 장면 반복 ──
+    cnt_phone = len(re.findall(r"전화|휴대폰이|진동했다|문자|메시지가", text))
+    cnt_window = len(re.findall(r"창밖|창 밖|유리창|내려다보", text))
+    cnt_elevator = len(re.findall(r"엘리베이터|로비를|현관을", text))
+    stats["전화/메시지"] = cnt_phone
+    stats["창밖 묘사"] = cnt_window
+    if cnt_phone > 4:
+        issues.append(f"⚠️ 전화/메시지 장면 {cnt_phone}회 — 대면/발견/관찰로 대체하세요.")
+    if cnt_window > 3:
+        issues.append(f"⚠️ '창밖' 묘사 {cnt_window}회 — 다른 방식으로 인물 내면을 쓰세요.")
+    if cnt_elevator > 2:
+        issues.append(f"⚠️ 엘리베이터/로비 {cnt_elevator}회 — 이동 묘사를 줄이세요.")
+
+    # ── 시제 체크 ──
+    present_patterns = re.findall(
+        r"(?:한다|된다|이다|간다|온다|본다|듣는다|만든다|열린다|닫힌다|울린다|채운다|넣는다|흐른다)\.",
+        text,
+    )
+    cnt_present = len(present_patterns)
+    stats["현재형 종결"] = cnt_present
+    if cnt_present > 3:
+        issues.append(f"🚨 현재형 종결어미 {cnt_present}회 감지 — 소설은 과거형(~했다)으로 써야 합니다!")
+
+    # ── 접속부사 과잉 ──
+    cnt_conj = len(re.findall(r"(?:그러나|하지만|그리고|또한|그래서|따라서)", text))
+    stats["접속부사"] = cnt_conj
+    if cnt_conj > 15:
+        issues.append(f"⚠️ 접속부사 {cnt_conj}회 — 접속부사 없이 문장을 병치하세요.")
+
+    # ── 같은 행동 반복 ──
+    action_patterns = [
+        (r"포크를 내려놓", "포크를 내려놓"),
+        (r"잔을 내려놓", "잔을 내려놓"),
+        (r"눈을 감", "눈을 감"),
+        (r"한숨을 쉬", "한숨을 쉬"),
+        (r"고개를 끄덕", "고개를 끄덕"),
+        (r"고개를 저", "고개를 저"),
+    ]
+    for pattern, label in action_patterns:
+        cnt = len(re.findall(pattern, text))
+        if cnt >= 3:
+            issues.append(f"⚠️ '{label}' {cnt}회 반복 — 같은 동작을 줄이세요.")
+
+    # ── 분량 ──
+    stats["총 글자수"] = len(text)
+
+    return {"issues": issues, "stats": stats}
+
+
+# ─────────────────────────────────────
+# Unit 요약 자동 생성
+# ─────────────────────────────────────
+def generate_unit_summary(unit_no: int, text: str) -> str:
+    """완성된 Unit의 1줄 요약을 생성한다."""
+    client = get_client()
+    if not client or not text or not text.strip():
+        return ""
+    try:
+        resp = client.messages.create(
+            model=os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-20250514"),
+            max_tokens=200,
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"다음은 소설의 UNIT {unit_no:02d} 원고이다. "
+                    "이 Unit의 핵심 사건, 인물 변화, 감정 상태를 1~2문장으로 요약하라. "
+                    "요약만 출력하고 다른 말은 하지 마라.\n\n"
+                    f"{text[:3000]}"
+                ),
+            }],
+        )
+        return resp.content[0].text.strip()
+    except Exception:
+        return ""
+
+
+def gather_all_summaries() -> str:
+    """모든 Unit 요약을 모아 반환한다."""
+    summaries = st.session_state.get("unit_summaries", {})
+    lines = []
+    for i in range(1, 14):
+        key = f"{i:02d}" if i < 13 else "13"
+        s = summaries.get(key, "")
+        if s:
+            lines.append(f"[UNIT {key} 요약] {s}")
+    return "\n".join(lines)
+
+
 def get_story_reinforcement_text() -> str:
     sr = st.session_state["story_reinforcement"]
     merged = []
@@ -402,10 +523,23 @@ def gather_all_drafts_text() -> str:
 
 
 def gather_recent_drafts(current_unit: int, window: int = 2) -> str:
-    """최근 N개 Unit 원고만 반환 — 프롬프트 컨텍스트 초과 방지"""
+    """이전 Unit 요약 + 최근 N개 Unit 원고 — 연결성과 컨텍스트 동시 확보"""
     drafts = st.session_state["unit_drafts"]
     titles = st.session_state["chapter_titles"]
+    summaries = st.session_state.get("unit_summaries", {})
     merged = []
+
+    # ── 1. 이전 전체 Unit의 1줄 요약 (컨텍스트 유지) ──
+    summary_lines = []
+    for i in range(1, current_unit):
+        key = f"{i:02d}" if i < 13 else "13"
+        s = summaries.get(key, "")
+        if s:
+            summary_lines.append(f"  UNIT {key}: {s}")
+    if summary_lines:
+        merged.append("[이전 Unit 요약 — 전체 흐름 파악용]\n" + "\n".join(summary_lines))
+
+    # ── 2. 최근 N개 Unit의 실제 텍스트 (연결성) ──
     start = max(1, current_unit - window)
     for i in range(start, current_unit):
         key = f"{i:02d}" if i < 13 else "13"
@@ -413,7 +547,6 @@ def gather_recent_drafts(current_unit: int, window: int = 2) -> str:
         if txt.strip():
             ch_title = titles.get(key, "")
             label = ch_title if ch_title else f"[UNIT {key}]"
-            # 마지막 2000자만 포함 (이전 Unit의 끝부분이 연결에 중요)
             if len(txt) > 3000:
                 txt = "(...전략...)\n" + txt[-3000:]
             merged.append(f"{label}\n{txt}")
@@ -1071,6 +1204,16 @@ if selected_unit == "01":
             else:
                 st.session_state["unit_drafts"]["01"] = merged
             set_status("Chapter 1이 확정되었습니다. UNIT 01로 저장 완료.", "success")
+            # 품질 자동 체크
+            final_text = ch_body if ch_title else merged
+            qr = analyze_unit_quality(final_text)
+            st.session_state["quality_report"] = qr
+            # Unit 요약 자동 생성
+            summary = generate_unit_summary(1, final_text)
+            if summary:
+                if "unit_summaries" not in st.session_state:
+                    st.session_state["unit_summaries"] = {}
+                st.session_state["unit_summaries"]["01"] = summary
 
 # ─── 일반 Unit 생성 (Unit 02~13) ───
 else:
@@ -1149,6 +1292,15 @@ else:
                             f"UNIT {unit_no:02d}는 생성되었지만 아직 짧거나 미완성일 수 있습니다. 다시 쓰기나 재생성을 권장합니다.",
                             "warning",
                         )
+                    # 품질 자동 체크
+                    qr = analyze_unit_quality(check_text)
+                    st.session_state["quality_report"] = qr
+                    # Unit 요약 자동 생성
+                    summary = generate_unit_summary(unit_no, check_text)
+                    if summary:
+                        if "unit_summaries" not in st.session_state:
+                            st.session_state["unit_summaries"] = {}
+                        st.session_state["unit_summaries"][selected_unit] = summary
 
     with draft_col2:
         rewrite_mode = st.selectbox(
@@ -1197,6 +1349,37 @@ if current_draft:
     )
     with st.expander(f"{label} 보기", expanded=True):
         st.text_area("원고", value=current_draft, height=420, label_visibility="collapsed")
+
+# 품질 리포트 표시
+qr = st.session_state.get("quality_report", {})
+if qr.get("issues") or qr.get("stats"):
+    with st.expander("📊 품질 리포트", expanded=True):
+        stats = qr.get("stats", {})
+        if stats:
+            stat_cols = st.columns(4)
+            stat_items = list(stats.items())
+            for idx, (k, v) in enumerate(stat_items[:4]):
+                with stat_cols[idx]:
+                    st.metric(k, v)
+            if len(stat_items) > 4:
+                stat_cols2 = st.columns(4)
+                for idx, (k, v) in enumerate(stat_items[4:8]):
+                    with stat_cols2[idx]:
+                        st.metric(k, v)
+        issues = qr.get("issues", [])
+        if issues:
+            for issue in issues:
+                st.warning(issue)
+        else:
+            st.success("✅ 주요 품질 문제 없음")
+
+# Unit 요약 표시
+summaries = st.session_state.get("unit_summaries", {})
+filled = {k: v for k, v in summaries.items() if v}
+if filled:
+    with st.expander("📋 Unit 요약 (전체 흐름)", expanded=False):
+        for key in sorted(filled.keys()):
+            st.markdown(f"**UNIT {key}**: {filled[key]}")
 
 # ─────────────────────────────────────
 # STEP 6

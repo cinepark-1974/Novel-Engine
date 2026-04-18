@@ -27,7 +27,7 @@ streamlit run main.py
 ```
 Novel-Engine/
 ├── main.py          # Streamlit 앱 (1,579줄)
-├── prompt.py        # 프롬프트 라이브러리 (1,291줄)
+├── prompt.py        # 프롬프트 라이브러리 (1,374줄)
 ├── requirements.txt # 의존성
 ├── .streamlit/
 │   └── config.toml  # 테마 설정
@@ -51,6 +51,8 @@ lxml>=4.9.0
 - 10장르 Rule Pack × 12필드
 - 상업소설 5대 기계 (Twist Map, Pacing, Cliffhanger, Betrayal, Information Layer)
 - Planting & Payoff + Villain 4 Questions + Goal/Need BJND
+- Genre Override (호러/코미디/로맨스 문체 오버라이드)
+- AI Anti-Pattern A1~A16 + 기능적 조연 규칙
 - 품질 자동 체크 + Unit 요약 + 캐릭터 추적
 - DOCX 소설 원고 포맷 내보내기
 

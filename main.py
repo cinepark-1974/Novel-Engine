@@ -28,19 +28,46 @@ from prompt import (
     build_ch1_stage_a_prompt,
     build_ch1_stage_b_prompt,
     build_ch1_stage_c_prompt,
+    # v3.0 신규
+    NOVEL_ENGINE_VERSION,
+    NOVEL_ENGINE_BUILD_DATE,
+    NOVEL_ENGINE_VERSION_TAG,
+    get_novel_engine_version_info,
+    _PROFESSION_PACK_AVAILABLE,
+    _PERIOD_PACK_AVAILABLE,
 )
+
+# v3.0 Period Pack 키 목록 (STEP 1 선택지용)
+try:
+    from period_pack import get_all_period_keys, get_period_label, detect_period_from_locked
+    PERIOD_KEYS = get_all_period_keys()
+except ImportError:
+    PERIOD_KEYS = []
+    def get_period_label(k): return ""
+    def detect_period_from_locked(t): return []
 
 # ─────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────
 APP_TITLE = "NOVEL ENGINE"
-APP_SUB = "NOVEL WRITER STUDIO"
+APP_SUB = "NOVEL WRITER STUDIO v3.0"
 
 DEFAULT_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
 MODEL_OPUS = os.getenv("ANTHROPIC_MODEL_OPUS", "claude-opus-4-20250514")
 MAX_TOKENS_SHORT = 4000
 MAX_TOKENS_MID = 6000
 MAX_TOKENS_LONG = 8192
+
+# v3.0 M1: BJND Scene Enforcer 임계치 (사전 차단 + 자동 재생성 트리거)
+BJND_THRESHOLDS = {
+    "있었다": 10,        # v2.5는 15 → v3.0은 10 (강화)
+    "것이었다": 2,       # v2.5는 3 → v3.0은 2 (강화)
+    "대사태그": 12,      # 말했다+물었다+대답했다 합계
+    "마치처럼": 1,       # "마치~처럼"/"~듯했다"/"~같았다" 합계
+    "현재형": 3,         # 현재형 종결 (치명적)
+}
+
+AUTO_REGEN_MAX_RETRIES = 1  # 자동 재생성 시도 최대 횟수
 
 UNIT_TARGET_LENGTHS = {
     1: 7000, 2: 7000, 3: 8000,
@@ -367,26 +394,48 @@ def is_incomplete_text(text: str, unit_no: int) -> bool:
 
 
 # ─────────────────────────────────────
-# 품질 자동 체크 (생성 후 즉시 경고)
+# 품질 자동 체크 (생성 후 즉시 경고) — v3.0 M1 BJND Scene Enforcer 연동
 # ─────────────────────────────────────
 def analyze_unit_quality(text: str) -> dict:
-    """생성된 Unit 원고의 품질 문제를 자동 감지한다."""
+    """생성된 Unit 원고의 품질 문제를 자동 감지한다.
+    v3.0: BJND 임계치 강화 + 자동 재생성용 violations 구조화 반환.
+
+    Returns:
+        {
+            "issues": [경고 문자열 리스트 — UI 표시용],
+            "stats": {지표명: 값},
+            "violations": {지표키: {count, threshold, severity}},  # v3.0 신규
+            "should_regenerate": bool,  # v3.0 신규 — 자동 재생성 트리거 여부
+        }
+    """
     import re
     if not text or not text.strip():
-        return {}
+        return {"issues": [], "stats": {}, "violations": {}, "should_regenerate": False}
 
     issues = []
     stats = {}
+    violations = {}  # v3.0 신규: 재생성 트리거용
 
-    # ── 종결어미 반복 ──
+    # ── 종결어미 반복 (v3.0: "있었다" 15→10, "것이었다" 3→2) ──
     cnt_isseotda = len(re.findall(r"있었다", text))
     cnt_geosieotda = len(re.findall(r"것이었다", text))
     stats["있었다"] = cnt_isseotda
     stats["것이었다"] = cnt_geosieotda
-    if cnt_isseotda > 15:
-        issues.append(f"⚠️ '있었다' {cnt_isseotda}회 — 15회 이하로 줄이세요. 구체적 동사로 대체.")
-    if cnt_geosieotda > 3:
-        issues.append(f"⚠️ '것이었다' 해설체 {cnt_geosieotda}회 — 3회 이하로.")
+
+    if cnt_isseotda > BJND_THRESHOLDS["있었다"]:
+        issues.append(f"⚠️ '있었다' {cnt_isseotda}회 — {BJND_THRESHOLDS['있었다']}회 이하로 줄이세요. 구체 동사로 대체.")
+        violations["있었다"] = {
+            "count": cnt_isseotda,
+            "threshold": BJND_THRESHOLDS["있었다"],
+            "severity": "high",
+        }
+    if cnt_geosieotda > BJND_THRESHOLDS["것이었다"]:
+        issues.append(f"⚠️ '것이었다' 해설체 {cnt_geosieotda}회 — {BJND_THRESHOLDS['것이었다']}회 이하로.")
+        violations["것이었다"] = {
+            "count": cnt_geosieotda,
+            "threshold": BJND_THRESHOLDS["것이었다"],
+            "severity": "high",
+        }
 
     # ── 대사 태그 반복 ──
     cnt_said = len(re.findall(r"말했다", text))
@@ -394,8 +443,29 @@ def analyze_unit_quality(text: str) -> dict:
     cnt_answered = len(re.findall(r"대답했다", text))
     tag_total = cnt_said + cnt_asked + cnt_answered
     stats["대사태그 합계"] = tag_total
-    if tag_total > 12:
+    if tag_total > BJND_THRESHOLDS["대사태그"]:
         issues.append(f"⚠️ 대사 태그(말했다/물었다/대답했다) {tag_total}회 — 행동 태그로 대체하세요.")
+        violations["대사태그"] = {
+            "count": tag_total,
+            "threshold": BJND_THRESHOLDS["대사태그"],
+            "severity": "medium",
+        }
+
+    # ── "마치 ~처럼" / "~듯했다" / "~같았다" 반복 (v3.0 신규) ──
+    cnt_macheoreom = len(re.findall(r"마치\s*.*?처럼", text))
+    cnt_deuthaetda = len(re.findall(r"듯했다|듯이", text))
+    cnt_gatatda = len(re.findall(r"같았다", text))
+    simile_total = cnt_macheoreom + cnt_deuthaetda + cnt_gatatda
+    stats["비유 패턴"] = simile_total
+    # 문단 단위는 정확 측정이 어려우니, Unit 전체에서 Unit당 약 1문단 1회 기준으로 임계
+    # 4개 문단당 1개 정도가 리미트 → 대략 Unit 분량 기준 6~8회까지 허용
+    if simile_total > 8:
+        issues.append(f"⚠️ '마치 ~처럼/듯했다/같았다' 합계 {simile_total}회 — 비유 과잉.")
+        violations["마치처럼"] = {
+            "count": simile_total,
+            "threshold": 8,
+            "severity": "medium",
+        }
 
     # ── 장면 반복 ──
     cnt_phone = len(re.findall(r"전화|휴대폰이|진동했다|문자|메시지가", text))
@@ -405,26 +475,35 @@ def analyze_unit_quality(text: str) -> dict:
     stats["창밖 묘사"] = cnt_window
     if cnt_phone > 4:
         issues.append(f"⚠️ 전화/메시지 장면 {cnt_phone}회 — 대면/발견/관찰로 대체하세요.")
+        violations["전화"] = {"count": cnt_phone, "threshold": 4, "severity": "medium"}
     if cnt_window > 3:
         issues.append(f"⚠️ '창밖' 묘사 {cnt_window}회 — 다른 방식으로 인물 내면을 쓰세요.")
+        violations["창밖"] = {"count": cnt_window, "threshold": 3, "severity": "low"}
     if cnt_elevator > 2:
         issues.append(f"⚠️ 엘리베이터/로비 {cnt_elevator}회 — 이동 묘사를 줄이세요.")
+        violations["엘리베이터"] = {"count": cnt_elevator, "threshold": 2, "severity": "low"}
 
-    # ── 시제 체크 ──
+    # ── 시제 체크 (v3.0: 치명적) ──
     present_patterns = re.findall(
         r"(?:한다|된다|이다|간다|온다|본다|듣는다|만든다|열린다|닫힌다|울린다|채운다|넣는다|흐른다)\.",
         text,
     )
     cnt_present = len(present_patterns)
     stats["현재형 종결"] = cnt_present
-    if cnt_present > 3:
+    if cnt_present > BJND_THRESHOLDS["현재형"]:
         issues.append(f"🚨 현재형 종결어미 {cnt_present}회 감지 — 소설은 과거형(~했다)으로 써야 합니다!")
+        violations["현재형"] = {
+            "count": cnt_present,
+            "threshold": BJND_THRESHOLDS["현재형"],
+            "severity": "critical",
+        }
 
     # ── 접속부사 과잉 ──
     cnt_conj = len(re.findall(r"(?:그러나|하지만|그리고|또한|그래서|따라서)", text))
     stats["접속부사"] = cnt_conj
     if cnt_conj > 15:
         issues.append(f"⚠️ 접속부사 {cnt_conj}회 — 접속부사 없이 문장을 병치하세요.")
+        violations["접속부사"] = {"count": cnt_conj, "threshold": 15, "severity": "low"}
 
     # ── 같은 행동 반복 ──
     action_patterns = [
@@ -443,7 +522,94 @@ def analyze_unit_quality(text: str) -> dict:
     # ── 분량 ──
     stats["총 글자수"] = len(text)
 
-    return {"issues": issues, "stats": stats}
+    # v3.0 신규: 자동 재생성 트리거 판정
+    # severity가 "critical" 또는 "high"인 violation이 있으면 재생성 대상
+    should_regenerate = any(
+        v.get("severity") in ("critical", "high")
+        for v in violations.values()
+    )
+
+    return {
+        "issues": issues,
+        "stats": stats,
+        "violations": violations,
+        "should_regenerate": should_regenerate,
+    }
+
+
+def build_retry_hint(violations: dict) -> str:
+    """v3.0 M1: 자동 재생성 시 프롬프트에 주입할 위반 지표 힌트를 생성.
+
+    prompt.py의 build_unit_draft_prompt에 retry_hint 인자로 전달된다.
+    """
+    if not violations:
+        return ""
+
+    # severity 순서대로 정렬 (critical → high → medium → low)
+    severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+    sorted_violations = sorted(
+        violations.items(),
+        key=lambda kv: severity_order.get(kv[1].get("severity", "low"), 9)
+    )
+
+    lines = []
+    for key, info in sorted_violations:
+        count = info.get("count", 0)
+        threshold = info.get("threshold", 0)
+        severity = info.get("severity", "")
+
+        # 지표별 구체 지시문 생성
+        if key == "있었다":
+            target = max(threshold - 2, 5)  # 여유 -2
+            lines.append(
+                f"- '있었다' 사용: 이전 {count}회 (임계 {threshold}회 초과). "
+                f"이번엔 {target}회 이하로 작성. 구체 동사로 전환: '놓여 있었다'→'놓였다', '서 있었다'→'기대어 있었다' 등."
+            )
+        elif key == "것이었다":
+            lines.append(
+                f"- '것이었다' 해설체: 이전 {count}회 (임계 {threshold}회 초과). "
+                f"이번엔 1회 이하로. 서술 구조를 재설계하라."
+            )
+        elif key == "대사태그":
+            target = max(threshold - 2, 8)
+            lines.append(
+                f"- 대사 태그 합계(말했다/물었다/대답했다): 이전 {count}회 (임계 {threshold}회 초과). "
+                f"이번엔 {target}회 이하로. 대사 10개 중 6개 이상은 행동 태그로 대체."
+            )
+        elif key == "마치처럼":
+            lines.append(
+                f"- 비유 패턴(마치~처럼/듯했다/같았다): 이전 {count}회 (임계 {threshold}회 초과). "
+                f"이번엔 5회 이하로. 문단당 1회만 허용."
+            )
+        elif key == "현재형":
+            lines.append(
+                f"- 🚨 현재형 종결: 이전 {count}회 (임계 {threshold}회 초과, 치명적). "
+                f"이번엔 0회로. 모든 서술은 과거형(~했다, ~였다, ~었다)."
+            )
+        elif key == "전화":
+            lines.append(
+                f"- 전화/메시지 장면: 이전 {count}회 (임계 {threshold}회 초과). "
+                f"이번엔 2회 이하로. 대면·발견·관찰로 대체."
+            )
+        elif key == "창밖":
+            lines.append(
+                f"- '창밖' 묘사: 이전 {count}회 (임계 {threshold}회 초과). "
+                f"이번엔 1회 이하로. 걷기·운전·사물 다루기 등 다른 방식으로 내면 표현."
+            )
+        elif key == "엘리베이터":
+            lines.append(
+                f"- 엘리베이터/로비/현관 이동: 이전 {count}회 (임계 {threshold}회 초과). "
+                f"이번엔 1회 이하로. 장면 전환으로 처리."
+            )
+        elif key == "접속부사":
+            lines.append(
+                f"- 접속부사 과잉: 이전 {count}회. 이번엔 10회 이하로. 문장 병치로 관계를 암시."
+            )
+        else:
+            lines.append(f"- {key}: 이전 {count}회 (임계 {threshold}회 초과). 감소 필요.")
+
+    return "\n".join(lines)
+
 
 
 # ─────────────────────────────────────
@@ -917,6 +1083,40 @@ st.markdown(
 render_status()
 
 # ─────────────────────────────────────
+# v3.0 SIDEBAR: 버전 및 활성 모듈 표시
+# ─────────────────────────────────────
+with st.sidebar:
+    st.markdown(f"### 👖 Novel Engine {NOVEL_ENGINE_VERSION}")
+    st.caption(f"Build {NOVEL_ENGINE_BUILD_DATE}")
+    st.markdown("---")
+    st.markdown("**v3.0 신규 모듈**")
+    st.markdown(
+        f"""
+- M1 BJND Scene Enforcer (자동 재생성)
+- M2 OPENING MASTERY
+- M3 BJND 4축 자기검증
+- M4 Sub-genre OVERRIDE 4종
+- M5 Profession Pack: {'✅' if _PROFESSION_PACK_AVAILABLE else '❌'}
+- M6 Chapter Signature
+- M7 Reader Retention Curve
+- M8 POV Discipline
+- M9 Period Pack: {'✅' if _PERIOD_PACK_AVAILABLE else '❌'}
+- M10 Profession × Period 교차검증
+"""
+    )
+    st.markdown("---")
+    st.markdown("**BJND 임계치**")
+    st.markdown(
+        f"""
+- 있었다 ≤ {BJND_THRESHOLDS['있었다']}회/Unit
+- 것이었다 ≤ {BJND_THRESHOLDS['것이었다']}회/Unit
+- 대사태그 ≤ {BJND_THRESHOLDS['대사태그']}회/Unit
+- 현재형 ≤ {BJND_THRESHOLDS['현재형']}회/Unit (치명적)
+"""
+    )
+    st.caption("임계치 초과 시 자동 재생성 1회")
+
+# ─────────────────────────────────────
 # STEP 1
 # ─────────────────────────────────────
 st.markdown('<div class="section-header">🔥 STEP 1 · 작품 자료 입력</div>', unsafe_allow_html=True)
@@ -963,6 +1163,61 @@ style_sample = st.text_area(
     placeholder="Mr.MOON이 직접 쓴 소설/산문/블로그 문장 일부",
 )
 
+# ─────────────────────────────────────
+# v3.0 신규: 직업(M5) + 시대(M9) 입력 섹션
+# ─────────────────────────────────────
+st.markdown(
+    '<div style="margin-top:16px; font-weight:600; color:#191970;">🎯 v3.0 · 전문성 강화 (직업 / 시대)</div>',
+    unsafe_allow_html=True,
+)
+st.caption(
+    "입력하신 정보로 Creator Engine의 Profession Pack(19 카테고리) 및 Period Pack(10 시대)이 자동 주입됩니다. "
+    "비워두면 주입하지 않습니다."
+)
+
+prof_col1, prof_col2 = st.columns([1, 1])
+
+with prof_col1:
+    profession_protagonist = st.text_input(
+        "주인공 직업 (M5)",
+        placeholder="예: M&A 변호사 / 강력계 형사 / 오너 셰프 / 투자은행 VP / 군의관",
+        help="Profession Pack이 자동 감지하여 전문 용어·공간·일상·스트레스를 주입합니다.",
+    )
+
+with prof_col2:
+    profession_antagonist = st.text_input(
+        "주요 조연/적대자 직업 (M5, 선택)",
+        placeholder="예: 검사 / 조직폭력 보스 / 기자 / 로비스트",
+        help="주인공과 다른 직업이면 추가 주입. 같으면 중복 방지.",
+    )
+
+# v3.0 M9: 시대 설정
+period_col1, period_col2 = st.columns([1, 2])
+
+with period_col1:
+    period_mode = st.radio(
+        "시대 모드 (M9)",
+        ["현대 (시대 주입 없음)", "자동 감지 (LOCKED에서)", "수동 선택"],
+        index=0,
+        help="역사소설이 아니면 '현대'를 유지하세요. 자동 감지는 LOCKED 블록의 연도·인물·사건 키워드를 스캔합니다.",
+    )
+
+with period_col2:
+    period_keys_selected = []
+    if period_mode == "수동 선택" and PERIOD_KEYS:
+        # 한국어 라벨로 표시하되 내부 키로 저장
+        period_options = [f"{k} · {get_period_label(k)}" for k in PERIOD_KEYS]
+        selected_labels = st.multiselect(
+            "시대 선택 (최대 2개, 다중 시대 교차 전개 시 2개)",
+            period_options,
+            max_selections=2,
+            help="일제강점기 + 현대, 구한말 + 일제강점기 등 교차 전개도 가능.",
+        )
+        # label에서 키만 추출
+        period_keys_selected = [s.split(" · ")[0] for s in selected_labels]
+    elif period_mode == "자동 감지 (LOCKED에서)":
+        st.caption("ℹ️ LOCKED 블록 입력 후 Unit 생성 시 자동 감지됩니다.")
+
 lock_col1, lock_col2 = st.columns([1, 1])
 
 with lock_col1:
@@ -980,6 +1235,32 @@ with lock_col2:
     )
 
 locked_block = build_locked_block(locked_text, open_text)
+
+# v3.0: 직업/시대 정보를 하나의 문자열과 키 리스트로 정리
+profession_text_combined = " / ".join(
+    p.strip() for p in [profession_protagonist, profession_antagonist] if p and p.strip()
+)
+
+# 시대 키 확정
+if period_mode == "수동 선택":
+    active_period_keys = period_keys_selected
+elif period_mode == "자동 감지 (LOCKED에서)":
+    # 자동 감지는 각 생성 함수 내부에서 locked_block 기반으로 수행
+    active_period_keys = None
+else:
+    active_period_keys = []  # 빈 리스트 = 주입 안 함
+
+# 감지 미리보기 (자동 감지 모드일 때만)
+if period_mode == "자동 감지 (LOCKED에서)" and locked_text.strip() and _PERIOD_PACK_AVAILABLE:
+    try:
+        preview = detect_period_from_locked(locked_text)
+        if preview:
+            preview_labels = [get_period_label(k) for k in preview[:2]]
+            st.info(f"🕰️ 감지된 시대: {' · '.join(preview_labels)}")
+        else:
+            st.caption("ℹ️ LOCKED에서 시대 키워드를 감지하지 못했습니다. 현대로 처리됩니다.")
+    except Exception:
+        pass
 
 # ─────────────────────────────────────
 # STEP 2
@@ -1126,6 +1407,9 @@ def build_blueprint(group_key: str):
             notes=notes,
             style_dna=st.session_state["style_dna"],
             locked_block=locked_block,
+            # v3.0 신규
+            profession_text=profession_text_combined,
+            period_keys=active_period_keys,
         )
         return llm_call(prompt, max_tokens=MAX_TOKENS_MID)
 
@@ -1194,6 +1478,9 @@ if selected_unit == "01":
                     synopsis=synopsis, notes=notes,
                     style_dna=st.session_state["style_dna"], style_strength=style_strength,
                     locked_block=locked_block,
+                    # v3.0 신규
+                    profession_text=profession_text_combined,
+                    period_keys=active_period_keys,
                 )
                 return llm_call(prompt, max_tokens=MAX_TOKENS_MID, use_opus=True)
             result = run_with_status("Stage A: PEAK 오프닝을 생성 중입니다...", "Stage A 생성 완료.", _job)
@@ -1213,6 +1500,9 @@ if selected_unit == "01":
                     style_dna=st.session_state["style_dna"], style_strength=style_strength,
                     stage_a_text=st.session_state["ch1_stage_a"],
                     locked_block=locked_block,
+                    # v3.0 신규
+                    profession_text=profession_text_combined,
+                    period_keys=active_period_keys,
                 )
                 return llm_call(prompt, max_tokens=MAX_TOKENS_MID, use_opus=True)
             result = run_with_status("Stage B: WORLD 전개를 생성 중입니다...", "Stage B 생성 완료.", _job)
@@ -1233,6 +1523,9 @@ if selected_unit == "01":
                     stage_a_text=st.session_state["ch1_stage_a"],
                     stage_b_text=st.session_state["ch1_stage_b"],
                     locked_block=locked_block,
+                    # v3.0 신규
+                    profession_text=profession_text_combined,
+                    period_keys=active_period_keys,
                 )
                 return llm_call(prompt, max_tokens=MAX_TOKENS_MID, use_opus=True)
             result = run_with_status("Stage C: LOSS 균열을 생성 중입니다...", "Stage C 생성 완료.", _job)
@@ -1315,6 +1608,8 @@ else:
                         st.session_state["chapter_titles"][selected_unit] = ch_title
             else:
                 def _job():
+                    # v3.0 M1: 자동 재생성 로직
+                    # 1차 생성
                     prompt = build_unit_draft_prompt(
                         unit_no=unit_no,
                         working_title=working_title,
@@ -1333,8 +1628,68 @@ else:
                         target_length=UNIT_TARGET_LENGTHS.get(unit_no, 8000),
                         min_length=UNIT_MIN_LENGTHS.get(unit_no, 6000),
                         locked_block=locked_block,
+                        # v3.0 신규
+                        profession_text=profession_text_combined,
+                        period_keys=active_period_keys,
+                        retry_hint="",
                     )
-                    return generate_or_expand_unit(unit_no, prompt)
+                    first_result = generate_or_expand_unit(unit_no, prompt)
+
+                    # v3.0 M1: 1차 결과 BJND 검증
+                    if first_result:
+                        check_body = parse_chapter_title(first_result)[1] or first_result
+                        qr_first = analyze_unit_quality(check_body)
+
+                        # 재생성 트리거 조건 확인
+                        if qr_first.get("should_regenerate") and AUTO_REGEN_MAX_RETRIES > 0:
+                            st.info(
+                                f"⚡ BJND Scene Enforcer 발동: 임계치 초과 감지. "
+                                f"자동 재생성 시도 중... "
+                                f"(위반: {', '.join(qr_first.get('violations', {}).keys())})"
+                            )
+                            # 위반 지표를 힌트로 구성
+                            retry_hint = build_retry_hint(qr_first.get("violations", {}))
+                            # 2차 재생성 (retry_hint 주입)
+                            retry_prompt = build_unit_draft_prompt(
+                                unit_no=unit_no,
+                                working_title=working_title,
+                                genre=genre,
+                                format_mode=format_mode,
+                                pov=pov,
+                                overview=overview,
+                                characters=characters,
+                                synopsis=synopsis,
+                                notes=notes,
+                                story_reinforcement_merged=story_merged_text,
+                                all_blueprints_text=all_blueprints_text,
+                                previous_drafts=gather_recent_drafts(unit_no),
+                                style_dna=st.session_state["style_dna"],
+                                style_strength=style_strength,
+                                target_length=UNIT_TARGET_LENGTHS.get(unit_no, 8000),
+                                min_length=UNIT_MIN_LENGTHS.get(unit_no, 6000),
+                                locked_block=locked_block,
+                                profession_text=profession_text_combined,
+                                period_keys=active_period_keys,
+                                retry_hint=retry_hint,
+                            )
+                            retry_result = generate_or_expand_unit(unit_no, retry_prompt)
+
+                            if retry_result:
+                                # 2차 결과가 더 좋으면 교체, 아니면 1차 유지
+                                retry_body = parse_chapter_title(retry_result)[1] or retry_result
+                                qr_retry = analyze_unit_quality(retry_body)
+                                # severity high 이상 위반 수 비교
+                                def count_serious(qr):
+                                    return sum(
+                                        1 for v in qr.get("violations", {}).values()
+                                        if v.get("severity") in ("critical", "high")
+                                    )
+                                if count_serious(qr_retry) < count_serious(qr_first):
+                                    st.success("✅ 재생성본이 더 좋습니다. 재생성본으로 교체.")
+                                    return retry_result
+                                else:
+                                    st.warning("⚠️ 재생성본이 개선되지 않음. 1차 생성본 유지.")
+                    return first_result
 
                 done_msg = f"UNIT {unit_no:02d} 원고 생성이 완료되었습니다."
                 if unit_no == 12:

@@ -1,8 +1,366 @@
 # ─────────────────────────────────────────────────────────────
-# BLUE JEANS NOVEL ENGINE v2.5
-# prompt.py — Full System: Genre Rules + Sorkin/Curtis + Reader Psychology + LOCKED
+# BLUE JEANS NOVEL ENGINE v3.0
+# prompt.py — v3.0 Full Upgrade
+# 2026-04-24
+#
+# v3.0 신규 모듈 (M1~M10):
+#   M1  BJND Scene Enforcer        — HARD CONSTRAINT 최상단 + 자동 재생성 연동
+#   M2  OPENING MASTERY            — 장르=오프닝 DNA, 도파민≠발단 구분
+#   M3  BJND 4축 자기검증           — NECESSITY/AUTHENTICITY/EMPATHY/POTENCY
+#   M4  Sub-genre OVERRIDE 4종      — ROMCOM/MOBFILM/DRUGFILM/CONMAN
+#   M5  Profession Pack 이식        — 19개 직업 카테고리 (Creator Engine 동기화)
+#   M6  Chapter Signature System   — Opening/Closing Signature 필드
+#   M7  Reader Retention Curve     — Unit 3/7/10 강제 배치
+#   M8  POV Discipline             — 시점 위반 HARD CONSTRAINT
+#   M9  Period Pack 이식            — 10개 시대 카테고리 (Creator Engine 동기화)
+#   M10 Profession × Period 교차검증 — 시대별 직업 왜곡 방지
+#
 # © 2026 BLUE JEANS PICTURES. All rights reserved.
 # ─────────────────────────────────────────────────────────────
+
+# Profession Pack (v3.0 / M5)
+try:
+    from profession_pack import (
+        build_profession_block,
+        build_multi_profession_block,
+        detect_profession_category,
+    )
+    _PROFESSION_PACK_AVAILABLE = True
+except ImportError:
+    _PROFESSION_PACK_AVAILABLE = False
+    def build_profession_block(profession_text, character_name=""): return ""
+    def build_multi_profession_block(characters): return ""
+    def detect_profession_category(profession_text): return []
+
+# Period Pack (v3.0 / M9)
+try:
+    from period_pack import (
+        build_period_block,
+        build_period_block_auto,
+        detect_period_from_locked,
+        get_period_label,
+        get_all_period_keys,
+    )
+    _PERIOD_PACK_AVAILABLE = True
+except ImportError:
+    _PERIOD_PACK_AVAILABLE = False
+    def build_period_block(locked_text="", period_keys=None, max_periods=2): return ""
+    def build_period_block_auto(locked_text): return ""
+    def detect_period_from_locked(locked_text): return []
+    def get_period_label(period_key): return ""
+    def get_all_period_keys(): return []
+
+
+# =================================================================
+# [0] v3.0 신규 블록: M1 BJND SCENE ENFORCER
+# =================================================================
+BJND_SCENE_ENFORCER_BLOCK = """
+[★★★ HARD CONSTRAINT — BJND SCENE ENFORCER (v3.0 M1) ★★★]
+이 제약은 최우선이며, 한 Unit 생성 시 아래 수치를 절대 초과하면 안 된다.
+초과 시 자동 재생성 트리거가 발동한다.
+
+1. "있었다" 사용 횟수: Unit당 10회 이하. (v2.5 이전 임계치 15회 → 10회로 강화)
+   - "서류가 쌓여 있었다" → "서류가 테이블을 덮었다" 로 구체 동사 전환.
+   - "켜져 있었다" → "빛을 내뿜었다"
+   - "서 있었다" → "기대어 있었다" 또는 서서 ~했다 구조로.
+
+2. "것이었다" 해설체: Unit당 2회 이하. (v2.5 3회 → 2회로 강화)
+   - "~것이었다" → "~였다"로 줄이거나 서술 구조 재설계.
+
+3. 대사 태그 합계 (말했다+물었다+대답했다): Unit당 12회 이하.
+   - 대사 10개 중 6개 이상은 행동 태그로 대체.
+
+4. "마치 ~처럼" / "~듯했다" / "~같았다": Unit당 1회 이하. (한 문단에 2개 이상이면 실패)
+
+5. 현재형 종결(~한다, ~된다, ~이다): Unit당 3회 이하.
+   - 4회 이상이면 치명적 실패. 모든 서술은 과거형.
+
+★ 재생성 시: 직전 시도의 구체 위반 수치가 프롬프트에 주입된다.
+   예: "직전 생성본에서 '있었다' 13회 사용. 이번엔 8회 이하로." 
+   해당 지시가 주어지면 반드시 그 숫자 이하로 작성하라. ★
+""".strip()
+
+
+# =================================================================
+# [0-2] v3.0 신규 블록: M2 OPENING MASTERY
+# =================================================================
+OPENING_MASTERY_BLOCK = """
+[OPENING MASTERY — 오프닝 장인 정신 (v3.0 M2, Creator Engine v2.3.10 동기화)]
+
+★ 핵심 원칙 3가지 ★
+
+[1] 장르 = 오프닝 DNA
+Chapter 1의 오프닝은 장르 자체를 체현해야 한다.
+- 범죄/스릴러: 사건의 결과(시체·사고·파국)부터. 질문은 "어떻게?"
+- 드라마: 관계의 긴장·결함이 구체 장면으로. 질문은 "왜 이 사람은?"
+- 액션: 위기 상황 한가운데서 시작. 질문은 "살아남을 수 있을까?"
+- 로맨스: 두 인물의 첫 마찰 또는 설렘. 질문은 "이 관계는 어떻게 될까?"
+- 코미디: 주인공의 코믹 결함이 첫 장면에 노출. 질문은 "이 사람 괜찮나?"
+- 호러: 일상의 미세한 균열. 질문은 "뭔가 잘못됐다"
+- SF: 세계의 규칙 하나를 보여준다. 질문은 "이 세상은 어떻게 작동하는가?"
+- 판타지: 주인공을 이 세계에 귀속시키는 장면. 질문은 "이 세계의 운명은?"
+- 역사: 시대의 압력이 인물에게 가해지는 순간. 질문은 "이 시대를 어떻게 살아낼까?"
+
+[2] 두 번째 장르가 복합 본질을 결정
+장르가 두 개 이상이면(예: 금융 스릴러 + 로맨스), 첫 번째 장르가 오프닝 DNA.
+두 번째 장르는 Stage B(WORLD) 또는 Stage C(LOSS)에서 진입한다.
+- "금융 스릴러 + 로맨스" → 오프닝은 스릴러 DNA(딜, 압박, 숫자). 로맨스는 Stage B에서.
+- "역사 드라마 + 미스터리" → 오프닝은 역사 드라마 DNA(시대의 압력). 미스터리는 Stage C에서.
+
+[3] ★ 오프닝 도파민 ≠ 발단 사건 ★
+오프닝 도파민(독자를 낚는 매혹)과 발단 사건(inciting incident, 주인공의 여정을 강제하는 촉발 사건)은 다르다.
+- PEAK(오프닝 도파민): 주인공이 정상에 있는 상태의 매혹. 독자는 이 인물을 "보고 싶어진다."
+- LOSS(발단 사건): PEAK를 깨뜨리는 균열. 주인공이 여정을 시작하게 만든다.
+- Chapter 1 Stage A는 도파민. 발단 사건은 Stage C에서 점화.
+- 둘을 한 장면에 섞지 마라. Stage A에서 발단 사건을 쓰면 매혹이 없고, Stage C에서 PEAK만 쓰면 동력이 없다.
+
+★ 오프닝 도파민의 3가지 조건 ★
+- 구체적: 추상이 아니라 손에 잡히는 디테일로 정상을 보여준다.
+- 감각적: 소리·냄새·촉감 중 최소 3개 채널을 연다.
+- 인물적: 이 행위가 오직 이 인물만이 할 수 있는 방식이어야 한다. (Tactics = Character)
+""".strip()
+
+
+# =================================================================
+# [0-3] v3.0 신규 블록: M3 BJND 4축 자기검증
+# =================================================================
+BJND_SELF_VERIFICATION_BLOCK = """
+[BJND 4축 자기검증 — Unit 설계 직후 필수 자체 채점 (v3.0 M3)]
+
+각 Unit 설계안을 작성한 직후, 아래 4축으로 스스로 채점하라.
+각 축 0~5점. 합계 14점 미만 Unit은 재설계 대상이다.
+
+[NECESSITY — 필요성] (0~5)
+이 Unit이 없으면 서사가 무너지는가?
+- 0: 생략해도 서사가 성립함
+- 3: 있으면 좋지만 대체 가능
+- 5: 생략 불가능. 이 Unit 없이 다음 Unit이 성립하지 않음
+
+[AUTHENTICITY — 진정성] (0~5)
+인물 행동이 Goal/Need(BJND)에서 유기적으로 나오는가?
+- 0: 플롯 편의를 위한 부자연스러운 행동
+- 3: 맥락상 허용 가능하나 필연성 약함
+- 5: 인물의 욕망·결핍에서 필연적으로 도출됨
+
+[EMPATHY — 감정이입] (0~5)
+독자가 감정이입할 지점이 이 Unit 안에 있는가?
+- 0: 전달은 되지만 감정 자극이 없음
+- 3: 최소 1개 감정이입 지점
+- 5: 복수의 감정 층위. 독자가 인물과 함께 떨리거나 흔들림
+
+[POTENCY — 추진력] (0~5)
+다음 Unit으로 끌고 가는 힘이 있는가? (Hook → Punch → Cliffhanger)
+- 0: Unit이 닫혀서 끝남. 페이지를 덮고 싶게 만듦
+- 3: 다음 Unit 궁금증 유발
+- 5: 다음 Unit을 읽지 않고는 못 배길 Punch
+
+★ 출력 형식 ★
+각 Unit 설계 하단에 다음을 덧붙여라:
+[BJND 4축 자기채점]
+- NECESSITY: N점 / 이유
+- AUTHENTICITY: N점 / 이유
+- EMPATHY: N점 / 이유
+- POTENCY: N점 / 이유
+- 합계: N점
+- 판정: 재설계 필요 / 통과 / 강함
+
+★ 합계 14점 미만이면 재설계 필요하다고 명시하고, 무엇을 어떻게 강화할지 2~3줄로 제시하라. ★
+""".strip()
+
+
+# =================================================================
+# [0-4] v3.0 신규 블록: M7 READER RETENTION CURVE
+# =================================================================
+READER_RETENTION_CURVE_BLOCK = """
+[READER RETENTION CURVE — 독자 이탈 곡선 (v3.0 M7)]
+
+상업소설 독자 이탈 피크는 Unit 3, 7, 10에 몰린다.
+각 피크 지점에 강제 배치되어야 할 서사 장치는 다음과 같다.
+
+[Unit 3 — 첫 이탈 피크]
+독자가 "이 책을 계속 읽을 가치가 있는가"를 판단하는 지점.
+★ 강제 배치: Twist L2 (관계 층위 반전). 인물 간 알려졌던 관계의 새로운 면이 드러난다.
+- 예: 동맹이 의심스러워지거나, 적이 생각보다 복잡하거나, 조력자에게 다른 목적이 있음.
+- Unit 3 설계에 반드시 "Twist L2"를 명시하고 반영하라.
+
+[Unit 7 — 중간 이탈 피크]
+미드포인트. 독자가 "이야기가 어디로 가는가"를 체감해야 하는 지점.
+★ 강제 배치: Betrayal B2 (중간 배신) + Cliffhanger C1~C3 중 선택.
+- B2: 주인공의 판단이 틀렸음이 드러남. 배신자의 정체 또는 동기가 밝혀짐.
+- C1(위협)/C2(발견)/C3(결정) 중 하나로 Unit을 닫아라.
+- Unit 7 설계에 반드시 "Betrayal B2 + Cliffhanger C1~C3"를 명시하라.
+
+[Unit 10 — 후반 이탈 피크]
+클라이맥스 직전. 독자가 "이 결말이 납득되는가"를 준비하는 지점.
+★ 강제 배치: Twist L4 (세계 구조 반전) + Information Layer 폭로.
+- L4: 이 이야기의 숨겨진 구조가 드러남. 1막부터 심어둔 Plant들이 Payoff됨.
+- 독자가 "지금까지의 사건이 다 이 때문이었구나" 싶은 깨달음.
+- Unit 10 설계에 반드시 "Twist L4 + Information Layer 폭로"를 명시하라.
+
+★ 위 3개 Unit은 다른 Unit보다 구조적 밀도가 높아야 하며, Hook·Punch가 가장 강해야 한다. ★
+""".strip()
+
+
+# =================================================================
+# [0-5] v3.0 신규 블록: M8 POV DISCIPLINE
+# =================================================================
+def build_pov_discipline_block(pov: str) -> str:
+    """시점 기반 HARD CONSTRAINT 블록 생성 (v3.0 M8)"""
+    pov = (pov or "").strip()
+
+    if "1인칭" in pov:
+        return """
+[★ POV DISCIPLINE — 1인칭 시점 규칙 (v3.0 M8) ★]
+이 작품은 1인칭 시점이다. 아래 규칙은 HARD CONSTRAINT다.
+
+1. 주인공(나)이 직접 보거나 듣거나 느낀 것만 서술할 수 있다.
+2. 다른 인물의 내면을 절대 서술하지 마라. ("그는 슬퍼졌다" 금지)
+3. 다른 인물의 감정은 외양, 행동, 대사로만 전달하라.
+   BAD: "세웅은 마음속으로 유진을 의심했다."
+   GOOD: "세웅은 유진을 한참 바라보다 시선을 돌렸다. 찻잔을 드는 손끝이 살짝 떨렸다."
+4. "내가 보지 못한 장면"을 서술하지 마라. 전언·서신·뉴스 등 매개체를 통해서만 가능.
+5. 주인공이 모르는 정보는 작가도 모른다. 독자에게 설명하지 마라.
+
+위반 시 치명적 실패로 간주한다.
+""".strip()
+
+    if "3인칭 제한" in pov:
+        return """
+[★ POV DISCIPLINE — 3인칭 제한 시점 규칙 (v3.0 M8) ★]
+이 작품은 3인칭 제한 시점이다. 아래 규칙은 HARD CONSTRAINT다.
+
+1. 각 Unit의 시점 인물(POV character) 1명을 명확히 설정하라.
+2. 그 Unit 안에서는 POV 인물의 내면만 서술한다.
+3. 다른 인물의 내면을 서술하면 시점 위반(head-hopping)이다.
+   BAD: "유진은 화가 났다. 세웅은 그녀를 이해하려 애썼다." (한 장면 안에서 두 명의 내면 서술)
+   GOOD: "유진은 화가 났다. 세웅은 말없이 그녀를 바라봤다. 테이블 밑에서 손을 꽉 쥐었다." (세웅의 내면은 외양으로만)
+4. Unit 경계에서 POV 전환은 허용. 단, 블루프린트에 "이 Unit의 POV는 ○○"라고 명시된 경우만.
+5. 한 Unit 안에서 POV 전환은 금지. 예외: [CUT] 컷어웨이 장면. 이 경우 빈 줄로 확실히 분리.
+
+위반 시 치명적 실패로 간주한다.
+""".strip()
+
+    if "듀얼" in pov or "다중" in pov:
+        return """
+[★ POV DISCIPLINE — 듀얼/다중 시점 규칙 (v3.0 M8) ★]
+이 작품은 듀얼/다중 시점이다. 아래 규칙은 HARD CONSTRAINT다.
+
+1. 각 Unit 또는 각 장면 블록의 POV 인물을 명시적으로 설정하라.
+2. 장면 블록 안에서는 한 인물의 내면만 서술한다. (head-hopping 금지)
+3. POV 전환은 빈 줄 + 장면 경계에서만 허용.
+4. 같은 Unit 안에서 POV를 3명 이상 돌리면 독자가 정서 앵커를 잃는다. Unit당 최대 2개 POV.
+5. 각 POV 인물의 정보 비대칭(독자는 알고 POV 인물은 모르는 것)을 의도적으로 설계하라.
+
+위반 시 치명적 실패로 간주한다.
+""".strip()
+
+    return ""
+
+
+# =================================================================
+# [0-6] v3.0 신규 블록: M4 SUB-GENRE OVERRIDE 4종
+# =================================================================
+SUBGENRE_OVERRIDE_ROMCOM = """
+[ROMCOM 서브장르 오버라이드 — Romantic Comedy (v3.0 M4)]
+
+1. 스크루볼 DNA: 두 주인공의 대사가 탁구처럼 빠르게 오간다. 대사 리듬이 로맨스의 엔진.
+2. 오해-폭로 리듬: 오해가 쌓이고 터지고 다시 쌓이는 진자 운동. 2막에 최소 2회.
+3. 소설적 상향: 행동 태그 기본 유지하되, 대사 길이를 영화/드라마보다 길게 확장 가능.
+4. 코믹 결함이 연애 결함과 동형: 주인공의 성격 결함이 곧 연애를 망치는 이유.
+5. Beats: Meet Cute → Adorable Tension → Big Misunderstanding → Grand Gesture.
+6. Stakes는 수치·체면·자존심. 목숨이 아니라 "이 사람 앞에서 망신당할까봐"가 긴장.
+""".strip()
+
+SUBGENRE_OVERRIDE_MOBFILM = """
+[MOBFILM 서브장르 오버라이드 — Mob/Yakuza/Gangster (v3.0 M4)]
+
+1. 폭력의 일상성: 폭력이 특별한 사건이 아니라 일상 업무로 제시된다. 담담한 과거형.
+2. 의리-배신 2축: 모든 관계는 의리 vs 배신의 긴장 위에 놓인다. 제3의 축 없음.
+3. 권력 서열 명시: 조직 위계(보스/중간보스/행동대/말단)가 항상 시각적으로 드러난다. 앉는 자리, 먼저 말하는 순서.
+4. 명예의 규칙: 조직 내부 규칙이 법보다 상위다. 이 규칙을 어기는 순간이 전환점.
+5. 대사는 짧고 건조. 감정을 대사로 풀지 마라. 침묵, 시선, 술잔, 담배가 더 많이 말한다.
+6. 공간: 특정 장소의 고정(특정 술집, 특정 방)이 정서적 앵커. 반복 등장으로 의미 누적.
+""".strip()
+
+SUBGENRE_OVERRIDE_DRUGFILM = """
+[DRUGFILM 서브장르 오버라이드 — Drug/Addiction (v3.0 M4)]
+
+1. 중독 타임라인: 첫 경험(매혹) → 일상화 → 통제 상실 → 파괴의 4단계를 명확히 설계.
+2. 감각 왜곡 묘사 허용: 시간 지연, 공감각, 과잉 집중 등 비일상 지각을 묘사해도 된다.
+   단, A2(격언조 심리) 금지는 유지. 감각을 감각으로 쓰되 관념으로 환원 금지.
+3. 중독의 경제학: 돈·시간·관계가 약물에 어떻게 빨려들어가는지 수치와 장면으로.
+4. 공모와 고립의 역설: 함께 쓰는 사람들과 가까워지며 가족·친구에게서 멀어진다.
+5. 회복 서사를 미화하지 마라. 재발, 죄책감, 몸의 고통이 함께 가야 한다.
+6. 금지: "이것은 일탈이 아니라 탐구였다" 류의 자기합리화 독백을 서술자가 옹호하지 마라.
+""".strip()
+
+SUBGENRE_OVERRIDE_CONMAN = """
+[CONMAN 서브장르 오버라이드 — Con Artist/Heist (v3.0 M4)]
+
+1. Information Layer I1~I4 강제: 독자와 빌런(또는 사기꾼)의 정보 비대칭이 엔진.
+2. 독자가 속고 있다가 마지막에 "아 그래서 그랬구나" 깨닫는 이중 구조 필수.
+3. 준비 → 실행 → 반전의 3단 구조. 반전은 최소 2중(속은 줄 알았는데 속였고, 다시 속았다).
+4. 디테일의 현실감: 사기의 기술(서류, 계좌, 신분, 심리)이 실제로 작동 가능해 보여야 한다.
+5. 공범 관계의 배신: 같이 사기를 친 사람들 사이의 의심·배신이 부차 플롯.
+6. 독자에게 "지금 보는 장면이 누구의 관점에서 조작된 것인지" 의문을 심어라.
+7. 금지: 우연에 기댄 성공. 모든 반전은 사전에 설계된 것이어야 한다(사후 플래시백으로 공개 가능).
+""".strip()
+
+
+def get_subgenre_override(genre: str) -> str:
+    """장르 문자열에서 서브장르 오버라이드 블록 반환 (v3.0 M4)"""
+    g = (genre or "").lower()
+    overrides = []
+    # ROMCOM (로맨틱 코미디 / 롬코)
+    if ("롬코" in g) or ("로맨틱 코미디" in g) or ("romcom" in g) or ("rom-com" in g):
+        overrides.append(SUBGENRE_OVERRIDE_ROMCOM)
+    # MOBFILM (조폭/야쿠자/갱스터/마피아)
+    if any(k in g for k in ["조폭", "야쿠자", "갱스터", "마피아", "mob", "gangster", "yakuza"]):
+        overrides.append(SUBGENRE_OVERRIDE_MOBFILM)
+    # DRUGFILM (마약/중독)
+    if any(k in g for k in ["마약", "중독", "drug", "addiction"]):
+        overrides.append(SUBGENRE_OVERRIDE_DRUGFILM)
+    # CONMAN (사기/케이퍼/헤이스트)
+    if any(k in g for k in ["사기", "케이퍼", "헤이스트", "conman", "con artist", "heist"]):
+        overrides.append(SUBGENRE_OVERRIDE_CONMAN)
+    return "\n\n".join(overrides)
+
+
+# =================================================================
+# [0-7] v3.0 신규 블록: M10 Profession × Period 교차검증
+# =================================================================
+PROFESSION_PERIOD_CROSS_CHECK_BLOCK = """
+[PROFESSION × PERIOD 교차검증 — 시대별 직업 왜곡 방지 (v3.0 M10)]
+
+시대와 직업이 동시에 주입된 경우, 아래 교차 규칙을 반드시 준수하라.
+
+[시대별 직업 제약]
+- 조선 전기/중기/후기: 현대적 의미의 '검사·변호사·기자·의사(양의)' 없음.
+  → 관직(의금부·사간원·사헌부), 의원(醫員, 한의), 천문관 등 시대 직업으로 대체.
+- 구한말(1876~1910): 양의·신식 법조인·신문기자가 태동하는 시기.
+  → '의사' 표기는 대한제국 관립의학교 졸업자 이후부터 가능. 변호사는 1905년 이후.
+- 일제강점기: 법조인은 조선총독부 체계. '검사(檢事)'는 일본 제국 법체계.
+  → 언론은 조선일보·동아일보 창간(1920) 이후부터. 그 전은 대한매일신보 등.
+- 해방정국(1945~1948): 미군정 체계. 경찰·군·검찰의 정체성이 이중(친일 잔재 + 신체제).
+- 한국전쟁(1950~1953): 직업 활동 자체가 전쟁에 종속. 의사=군의관/야전의료, 기자=종군기자.
+- 개발독재기(1961~1987): 현대적 직업 체계 확립. 단, 정보기관(중정·안기부)의 그림자.
+- 민주화기(1987~1999): 현대 한국 직업 체계의 성립기. IMF(1997) 전후가 분기점.
+
+[전문 용어 시대 체크]
+- "부장검사", "로펌 파트너", "어소시에이트" → 1980년대 이후에만 유효.
+- "PD", "편집국장" → 방송국은 1960년대 이후. 그 전은 "주필", "논설위원".
+- "인턴", "레지던트" 호칭 → 1980년대 이후. 그 전은 "수련의", "전공의".
+- "M&A", "펀드", "투자은행" → 1990년대 이후. IMF 이후 본격화.
+
+[자연스러움 검증]
+- 해당 시대에 그 직업이 존재했는가?
+- 존재했다면 현대와 같은 형태인가, 다른 형태인가?
+- 다르다면 시대에 맞는 명칭·절차·호칭을 쓰고 있는가?
+- 전문 용어를 썼다면 그 용어가 해당 시대에 실제 사용되었는가?
+
+★ 확신이 없으면 현대적 전문 용어 대신 해당 시대의 보편 표현을 쓰라. ★
+""".strip()
+
 
 # =================================================================
 # [1] LOCKED SYSTEM (v1.5 sync from Creator Engine)
@@ -502,11 +860,15 @@ LOSS가 드러내는 진짜 결핍이 작품 전체의 서사 동력이 된다.
 # =================================================================
 # [5] SYSTEM PROMPT
 # =================================================================
-SYSTEM_PROMPT = f"""당신은 BLUE JEANS NOVEL ENGINE이다.
+SYSTEM_PROMPT = f"""당신은 BLUE JEANS NOVEL ENGINE v3.0이다.
 사용자가 입력한 기획 자료를 바탕으로 아마존/교보문고에서 바로 판매 가능한 수준의
 장편 대중소설 원고를 생성하는 전문 소설 집필 엔진이다.
 
+{BJND_SCENE_ENFORCER_BLOCK}
+
 {LOCKED_SYSTEM_RULES}
+
+{OPENING_MASTERY_BLOCK}
 
 ★★★ 최우선 규칙: 소설 시제 ★★★
 이 엔진은 시나리오가 아니라 소설을 쓴다. 모든 서술은 과거형(~했다, ~였다, ~었다)으로 쓴다.
@@ -856,15 +1218,22 @@ GENRE_OVERRIDE_ROMANCE = """
 
 
 def get_genre_override(genre: str) -> str:
-    """장르에 따라 소설 문체 오버라이드 블록을 반환한다."""
+    """장르에 따라 소설 문체 오버라이드 블록을 반환한다.
+    v3.0: 기본 3종(호러/코미디/로맨스) + 서브장르 4종(ROMCOM/MOBFILM/DRUGFILM/CONMAN)
+    """
     g = genre.lower() if genre else ""
     overrides = []
+    # 기본 3종 (v2.5 호환)
     if "호러" in g or "공포" in g or "horror" in g:
         overrides.append(GENRE_OVERRIDE_HORROR)
     if "코미디" in g or "comedy" in g or "롬코" in g:
         overrides.append(GENRE_OVERRIDE_COMEDY)
     if "로맨스" in g or "romance" in g or "멜로" in g or "롬코" in g:
         overrides.append(GENRE_OVERRIDE_ROMANCE)
+    # 서브장르 4종 (v3.0 M4)
+    sub = get_subgenre_override(genre)
+    if sub:
+        overrides.append(sub)
     return "\n\n".join(overrides)
 
 # =================================================================
@@ -970,21 +1339,55 @@ def build_story_reinforcement_prompt(segment_name,working_title,genre,overview,c
 [STYLE DNA] {style_dna}""".strip()
 
 
-def build_unit_blueprint_prompt(group_key,working_title,genre,format_mode,pov,overview,characters,story_reinforcement_merged,synopsis,notes,style_dna,locked_block=""):
+def build_unit_blueprint_prompt(group_key,working_title,genre,format_mode,pov,overview,characters,story_reinforcement_merged,synopsis,notes,style_dna,locked_block="",profession_text="",period_keys=None):
+    """Unit 설계 프롬프트 (v3.0)
+    v3.0 추가: POV Discipline / BJND 4축 자기검증 / Reader Retention Curve /
+             Profession Pack / Period Pack / Chapter Signature / Sub-genre OVERRIDE
+    """
     gm = {"01-02":"기 구간 초반. 오프닝, 세계 진입, 발화 사건","03-04":"기에서 승으로. 되돌릴 수 없는 선택, 상황 확장","05-06":"승 구간 심화. 관계 확장, 첫 대가, 판 확대","07-08":"전 구간 진입. 중반 반전, 균열, 배신, 상실","09-10":"전에서 결로. 추락, 재정렬, 결전 준비","11-12":"결 구간. 클라이맥스, 정서 회수, 본편 마무리"}
-    return f"""다음 작품의 UNIT {group_key} 설계를 작성하라.
+
+    # v3.0 M8 POV Discipline
+    pov_block = build_pov_discipline_block(pov)
+
+    # v3.0 M5 Profession Pack
+    profession_block = ""
+    if profession_text and _PROFESSION_PACK_AVAILABLE:
+        profession_block = build_profession_block(profession_text)
+
+    # v3.0 M9 Period Pack
+    period_block = ""
+    if _PERIOD_PACK_AVAILABLE:
+        if period_keys:
+            period_block = build_period_block(locked_text="", period_keys=period_keys, max_periods=2)
+        elif locked_block:
+            period_block = build_period_block_auto(locked_block)
+
+    # v3.0 M10 Profession × Period 교차검증 (둘 다 있을 때만)
+    cross_check_block = ""
+    if profession_block and period_block:
+        cross_check_block = f"\n{PROFESSION_PERIOD_CROSS_CHECK_BLOCK}\n"
+
+    # v3.0 M4 Sub-genre OVERRIDE
+    subgenre_override = get_subgenre_override(genre)
+    subgenre_block = f"\n{subgenre_override}\n" if subgenre_override else ""
+
+    return f"""다음 작품의 UNIT {group_key} 설계를 작성하라. (Novel Engine v3.0)
 
 구간 의미: {gm.get(group_key,"")}
+
+{pov_block}
 
 요구사항:
 - 각 Unit의 시작(Hook)과 끝(Punch)을 장르 Rule Pack 기준으로 설계할 것
 - 독자 심리 원칙을 각 Unit에 최소 1개 이상 활용할 것
 - Unit 12가 포함된 경우 반드시 본편을 마무리하도록 설계할 것
+- ★ 각 Unit 설계 후 BJND 4축 자기채점을 반드시 수행할 것 (v3.0 M3) ★
 
 출력 형식:
 [UNIT XX]
 - 제목:
 - 서사 기능:
+- POV 인물 (3인칭 제한·듀얼·다중 시점일 때만 명시):
 - Unit 구조 유형 (아래 6유형 중 선택. 직전 Unit과 반드시 다른 유형):
   [INV] 조사/발견형 — 단서 수집, 정보 조각, 진실에 접근
   [CON] 대결/충돌형 — 직접 대면, 언쟁, 갈등 폭발
@@ -997,6 +1400,8 @@ def build_unit_blueprint_prompt(group_key,working_title,genre,format_mode,pov,ov
 - 감정 변화:
 - Hook (장면 시작):
 - Punch (장면 종결):
+- Opening Signature (이 Unit의 첫 문장 시그니처 — v3.0 M6): 한 문장으로 예시 제시
+- Closing Signature (이 Unit의 마지막 문장 시그니처 — v3.0 M6): 한 문장으로 예시 제시
 - 클리프행어 유형 (C1~C6 중 선택):
 - 반전 (Twist): 이 Unit에 배치되는 반전의 레벨(L1~L5)과 내용. 없으면 "없음".
 - 배신 추적: 이 Unit에서 동맹/적대 관계의 변화. 배신자의 행동이나 복선.
@@ -1004,6 +1409,19 @@ def build_unit_blueprint_prompt(group_key,working_title,genre,format_mode,pov,ov
 - Plant/Payoff: 이 Unit에서 심는 Plant (캐릭터/관계/세계관 중 어떤 유형?) / 이 Unit에서 회수하는 Payoff. 없으면 "없음".
 - 빌런 상태: Villain 4 Questions 기준 — 이 Unit에서 적대자가 이기고 있는가? 주인공의 계획을 뒤엎었는가?
 - 독자 심리 원칙:
+
+[BJND 4축 자기채점 — v3.0 M3 필수]
+- NECESSITY: 점수/이유
+- AUTHENTICITY: 점수/이유
+- EMPATHY: 점수/이유
+- POTENCY: 점수/이유
+- 합계 및 판정 (14점 미만 = 재설계)
+
+{READER_RETENTION_CURVE_BLOCK}
+
+{BJND_SELF_VERIFICATION_BLOCK}
+
+{subgenre_block}
 
 {TWIST_MAP_BLOCK}
 
@@ -1014,6 +1432,12 @@ def build_unit_blueprint_prompt(group_key,working_title,genre,format_mode,pov,ov
 {PLANTING_PAYOFF_BLOCK}
 
 {_genre_block(genre)}
+
+{profession_block}
+
+{period_block}
+
+{cross_check_block}
 
 {locked_block}
 
@@ -1029,22 +1453,82 @@ def build_unit_blueprint_prompt(group_key,working_title,genre,format_mode,pov,ov
 [STYLE DNA] {style_dna}""".strip()
 
 
-def build_unit_draft_prompt(unit_no,working_title,genre,format_mode,pov,overview,characters,synopsis,notes,story_reinforcement_merged,all_blueprints_text,previous_drafts,style_dna,style_strength,target_length,min_length,locked_block=""):
+def build_unit_draft_prompt(unit_no,working_title,genre,format_mode,pov,overview,characters,synopsis,notes,story_reinforcement_merged,all_blueprints_text,previous_drafts,style_dna,style_strength,target_length,min_length,locked_block="",profession_text="",period_keys=None,retry_hint=""):
+    """Unit 원고 생성 프롬프트 (v3.0)
+    v3.0 추가:
+      - POV Discipline (M8)
+      - Profession Pack (M5)
+      - Period Pack (M9)
+      - Profession × Period 교차검증 (M10)
+      - BJND Scene Enforcer 재주입 (M1)
+      - retry_hint: 자동 재생성 시 이전 위반 지표를 프롬프트에 주입
+    """
     if unit_no == 12:
         fr = "이 Unit은 본편의 마지막이다. 중심 갈등을 종결하고 감정적/플롯적 회수를 수행하라. 마지막 줄에 '끝.' 출력."
     else:
         fr = "아직 본편의 마지막이 아니므로 '끝.' 을 출력하지 않는다. 다음 Unit으로 넘어가게 하는 Punch를 남긴다."
     gk = detect_genre_key(genre)
     r = GENRE_RULES.get(gk, GENRE_RULES["미지정"])
-    opening_rule = f"\n{CHAPTER_ONE_OPENING_RULE}\n" if unit_no == 1 else ""
+    opening_rule = f"\n{CHAPTER_ONE_OPENING_RULE}\n\n{OPENING_MASTERY_BLOCK}\n" if unit_no == 1 else ""
     genre_override = get_genre_override(genre)
     genre_override_block = f"\n{genre_override}\n" if genre_override else ""
-    return f"""다음 작품의 UNIT {unit_no:02d} 실제 원고를 작성하라.
+
+    # v3.0 M8 POV Discipline
+    pov_block = build_pov_discipline_block(pov)
+    pov_section = f"\n{pov_block}\n" if pov_block else ""
+
+    # v3.0 M5 Profession Pack
+    profession_block = ""
+    if profession_text and _PROFESSION_PACK_AVAILABLE:
+        profession_block = build_profession_block(profession_text)
+    profession_section = f"\n{profession_block}\n" if profession_block else ""
+
+    # v3.0 M9 Period Pack
+    period_block = ""
+    if _PERIOD_PACK_AVAILABLE:
+        if period_keys:
+            period_block = build_period_block(locked_text="", period_keys=period_keys, max_periods=2)
+        elif locked_block:
+            period_block = build_period_block_auto(locked_block)
+    period_section = f"\n{period_block}\n" if period_block else ""
+
+    # v3.0 M10 Profession × Period 교차검증
+    cross_check_section = ""
+    if profession_block and period_block:
+        cross_check_section = f"\n{PROFESSION_PERIOD_CROSS_CHECK_BLOCK}\n"
+
+    # v3.0 M1 자동 재생성 시 위반 지표 주입
+    retry_section = ""
+    if retry_hint:
+        retry_section = f"""
+[★★★ AUTO-REGEN RETRY — 이전 생성본 위반 지표 (v3.0 M1) ★★★]
+이전 생성본에서 아래 항목이 임계치를 초과했다. 이번 생성에서는 반드시 임계치 이하로 작성하라.
+
+{retry_hint}
+
+★ 이 숫자를 지키는 것이 이번 생성의 최우선 목표다. ★
+"""
+
+    # v3.0 Unit Signature 주입 (M6)
+    unit_signature_note = """
+[UNIT SIGNATURE — v3.0 M6]
+이 Unit의 설계안(blueprint)에 "Opening Signature"와 "Closing Signature"가 명시되어 있다면,
+첫 문장과 마지막 문장을 그 시그니처의 결로 작성하라. 시그니처의 이미지·리듬·톤을 반영하되,
+문장 자체를 그대로 복제하지는 마라.
+"""
+
+    return f"""다음 작품의 UNIT {unit_no:02d} 실제 원고를 작성하라. (Novel Engine v3.0)
+
+{retry_section}
+
+{pov_section}
 
 챕터 제목 규칙:
 - 원고의 첫 줄에 반드시 [CHAPTER {unit_no}] — 서브타이틀 형식으로 출력할 것
 {opening_rule}
 {genre_override_block}
+{unit_signature_note}
+
 [장르적 재미 규칙]
 장르적 재미의 본질: {r['genre_fun']}
 Hook 규칙: {r['hook_rule']}
@@ -1057,11 +1541,19 @@ Punch 규칙: {r['punch_rule']}
 - 장면이 깔끔하게 끝나지 않게 Zeigarnik Effect를 적용할 것
 - Too Wet 금지: 감정을 직접 서술하지 말고 행동으로 보여줄 것
 
+{BJND_SCENE_ENFORCER_BLOCK}
+
 {PACING_RULES_BLOCK}
 
 {CLIFFHANGER_RULES_BLOCK}
 
 {INFORMATION_LAYER_BLOCK}
+
+{profession_section}
+
+{period_section}
+
+{cross_check_section}
 
 중요 원칙:
 - 줄거리 요약처럼 쓰지 말고 실제 소설 원고로 쓸 것
@@ -1214,18 +1706,43 @@ def build_title_review_prompt(current_title,overview,synopsis,story_reinforcemen
 # [10] CHAPTER 1 다단계 생성 — 3 STAGE SYSTEM
 # =================================================================
 
-def build_ch1_stage_a_prompt(working_title,genre,format_mode,pov,overview,characters,synopsis,notes,style_dna,style_strength,locked_block=""):
-    """Stage A: PEAK — 오프닝 장면 (음식 시그니처 + 인물 정의 + 감각 + 정상)"""
+def build_ch1_stage_a_prompt(working_title,genre,format_mode,pov,overview,characters,synopsis,notes,style_dna,style_strength,locked_block="",profession_text="",period_keys=None):
+    """Stage A: PEAK — 오프닝 장면 (v3.0: OPENING MASTERY + Profession + Period + POV)"""
     gk = detect_genre_key(genre)
     r = GENRE_RULES.get(gk, GENRE_RULES["미지정"])
-    return f"""다음 작품의 Chapter 1 오프닝 장면(Stage A: PEAK)만 작성하라.
+
+    pov_block = build_pov_discipline_block(pov)
+    pov_section = f"\n{pov_block}\n" if pov_block else ""
+
+    profession_block = ""
+    if profession_text and _PROFESSION_PACK_AVAILABLE:
+        profession_block = build_profession_block(profession_text)
+    profession_section = f"\n{profession_block}\n" if profession_block else ""
+
+    period_block = ""
+    if _PERIOD_PACK_AVAILABLE:
+        if period_keys:
+            period_block = build_period_block(locked_text="", period_keys=period_keys, max_periods=2)
+        elif locked_block:
+            period_block = build_period_block_auto(locked_block)
+    period_section = f"\n{period_block}\n" if period_block else ""
+
+    cross_check_section = ""
+    if profession_block and period_block:
+        cross_check_section = f"\n{PROFESSION_PERIOD_CROSS_CHECK_BLOCK}\n"
+
+    return f"""다음 작품의 Chapter 1 오프닝 장면(Stage A: PEAK)만 작성하라. (Novel Engine v3.0)
 
 이것은 Chapter 1의 첫 부분이다. 전체 챕터가 아니라 오프닝 장면만 쓴다.
 
+{OPENING_MASTERY_BLOCK}
+
 {CHAPTER_ONE_OPENING_RULE}
 
+{pov_section}
+
 [이 단계의 목표]
-- 주인공이 정상(PEAK)에 있는 상태를 보여준다
+- 주인공이 정상(PEAK)에 있는 상태를 보여준다 (★ 오프닝 도파민, 발단 사건 아님 ★)
 - 독자가 이 인물에게 매혹되어야 한다
 - 음식을 만들거나 다루는 행위로 시작한다
 - 요리 방식이 인물의 성격/능력/통제력을 정의한다
@@ -1248,7 +1765,15 @@ def build_ch1_stage_a_prompt(working_title,genre,format_mode,pov,overview,charac
 {r['genre_fun']}
 Hook 규칙: {r['hook_rule']}
 
+{BJND_SCENE_ENFORCER_BLOCK}
+
 {PACING_RULES_BLOCK}
+
+{profession_section}
+
+{period_section}
+
+{cross_check_section}
 
 {locked_block}
 
@@ -1264,14 +1789,33 @@ Hook 규칙: {r['hook_rule']}
 {_style_block(style_dna, style_strength)}""".strip()
 
 
-def build_ch1_stage_b_prompt(working_title,genre,format_mode,pov,overview,characters,synopsis,notes,style_dna,style_strength,stage_a_text="",locked_block=""):
-    """Stage B: WORLD — 전개 (세계관, 관계, 권력을 장면 안에)"""
+def build_ch1_stage_b_prompt(working_title,genre,format_mode,pov,overview,characters,synopsis,notes,style_dna,style_strength,stage_a_text="",locked_block="",profession_text="",period_keys=None):
+    """Stage B: WORLD — 전개 (v3.0: Profession + Period + POV)"""
     gk = detect_genre_key(genre)
     r = GENRE_RULES.get(gk, GENRE_RULES["미지정"])
-    return f"""다음은 Chapter 1의 Stage A(오프닝 장면)이다. 이어서 Stage B(전개)만 작성하라.
+
+    pov_block = build_pov_discipline_block(pov)
+    pov_section = f"\n{pov_block}\n" if pov_block else ""
+
+    profession_block = ""
+    if profession_text and _PROFESSION_PACK_AVAILABLE:
+        profession_block = build_profession_block(profession_text)
+    profession_section = f"\n{profession_block}\n" if profession_block else ""
+
+    period_block = ""
+    if _PERIOD_PACK_AVAILABLE:
+        if period_keys:
+            period_block = build_period_block(locked_text="", period_keys=period_keys, max_periods=2)
+        elif locked_block:
+            period_block = build_period_block_auto(locked_block)
+    period_section = f"\n{period_block}\n" if period_block else ""
+
+    return f"""다음은 Chapter 1의 Stage A(오프닝 장면)이다. 이어서 Stage B(전개)만 작성하라. (Novel Engine v3.0)
 
 [Stage A 원고 — 이미 작성됨. 이 뒤에 이어서 쓴다.]
 {stage_a_text}
+
+{pov_section}
 
 [이 단계의 목표]
 - Stage A에서 보여준 인물의 PEAK를 더 깊이 전개한다
@@ -1297,7 +1841,13 @@ def build_ch1_stage_b_prompt(working_title,genre,format_mode,pov,overview,charac
 [장르적 재미]
 {r['genre_fun']}
 
+{BJND_SCENE_ENFORCER_BLOCK}
+
 {PACING_RULES_BLOCK}
+
+{profession_section}
+
+{period_section}
 
 {locked_block}
 
@@ -1313,11 +1863,28 @@ def build_ch1_stage_b_prompt(working_title,genre,format_mode,pov,overview,charac
 {_style_block(style_dna, style_strength)}""".strip()
 
 
-def build_ch1_stage_c_prompt(working_title,genre,format_mode,pov,overview,characters,synopsis,notes,style_dna,style_strength,stage_a_text="",stage_b_text="",locked_block=""):
-    """Stage C: LOSS — 균열 (상실의 신호 + 클리프행어)"""
+def build_ch1_stage_c_prompt(working_title,genre,format_mode,pov,overview,characters,synopsis,notes,style_dna,style_strength,stage_a_text="",stage_b_text="",locked_block="",profession_text="",period_keys=None):
+    """Stage C: LOSS — 균열 (v3.0: Profession + Period + POV)"""
     gk = detect_genre_key(genre)
     r = GENRE_RULES.get(gk, GENRE_RULES["미지정"])
-    return f"""다음은 Chapter 1의 Stage A(오프닝)과 Stage B(전개)이다. 이어서 Stage C(균열)만 작성하라.
+
+    pov_block = build_pov_discipline_block(pov)
+    pov_section = f"\n{pov_block}\n" if pov_block else ""
+
+    profession_block = ""
+    if profession_text and _PROFESSION_PACK_AVAILABLE:
+        profession_block = build_profession_block(profession_text)
+    profession_section = f"\n{profession_block}\n" if profession_block else ""
+
+    period_block = ""
+    if _PERIOD_PACK_AVAILABLE:
+        if period_keys:
+            period_block = build_period_block(locked_text="", period_keys=period_keys, max_periods=2)
+        elif locked_block:
+            period_block = build_period_block_auto(locked_block)
+    period_section = f"\n{period_block}\n" if period_block else ""
+
+    return f"""다음은 Chapter 1의 Stage A(오프닝)과 Stage B(전개)이다. 이어서 Stage C(균열)만 작성하라. (Novel Engine v3.0)
 이것이 Chapter 1의 마지막 부분이다.
 
 [Stage A + B 원고 — 이미 작성됨. 이 뒤에 이어서 쓴다.]
@@ -1325,8 +1892,11 @@ def build_ch1_stage_c_prompt(working_title,genre,format_mode,pov,overview,charac
 
 {stage_b_text}
 
+{pov_section}
+
 [이 단계의 목표]
 - PEAK가 무너지는 순간을 쓴다. LOSS의 시작.
+- ★ 이것이 발단 사건(inciting incident)이다 — Stage A의 오프닝 도파민과는 다르다. 여기서 주인공의 여정이 시작된다. ★
 - 가진 것이 위협받는 구체적 신호: 전화, 뉴스, 발견, 방문자, 실수
 - 상실은 구체적이어야 한다: 돈, 지위, 안전, 관계, 자유 중 하나 이상이 직접적으로 위협
 - PEAK에서 보여준 것의 이면에 숨은 결핍(LACK)을 암시한다 (완전히 드러낼 필요는 없다)
@@ -1360,6 +1930,12 @@ def build_ch1_stage_c_prompt(working_title,genre,format_mode,pov,overview,charac
 {r['genre_fun']}
 Punch 규칙: {r['punch_rule']}
 
+{BJND_SCENE_ENFORCER_BLOCK}
+
+{profession_section}
+
+{period_section}
+
 {locked_block}
 
 [가제] {working_title}
@@ -1372,3 +1948,21 @@ Punch 규칙: {r['punch_rule']}
 [추가 메모] {notes}
 
 {_style_block(style_dna, style_strength)}""".strip()
+
+
+# =================================================================
+# [9] v3.0 VERSION INFO
+# =================================================================
+NOVEL_ENGINE_VERSION = "v3.0"
+NOVEL_ENGINE_BUILD_DATE = "2026-04-24"
+NOVEL_ENGINE_VERSION_TAG = "v3.0 / 2026-04-24 / BJND Enforcer + OPENING MASTERY + Profession + Period"
+
+def get_novel_engine_version_info() -> str:
+    """Novel Engine v3.0 메타 정보."""
+    profession_status = "OK" if _PROFESSION_PACK_AVAILABLE else "미로드"
+    period_status = "OK" if _PERIOD_PACK_AVAILABLE else "미로드"
+    return (
+        f"Novel Engine {NOVEL_ENGINE_VERSION} "
+        f"(Build {NOVEL_ENGINE_BUILD_DATE}) — "
+        f"Profession Pack: {profession_status} / Period Pack: {period_status}"
+    )

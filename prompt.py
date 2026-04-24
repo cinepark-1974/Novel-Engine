@@ -1,1968 +1,2133 @@
-# ─────────────────────────────────────────────────────────────
-# BLUE JEANS NOVEL ENGINE v3.0
-# prompt.py — v3.0 Full Upgrade
-# 2026-04-24
-#
-# v3.0 신규 모듈 (M1~M10):
-#   M1  BJND Scene Enforcer        — HARD CONSTRAINT 최상단 + 자동 재생성 연동
-#   M2  OPENING MASTERY            — 장르=오프닝 DNA, 도파민≠발단 구분
-#   M3  BJND 4축 자기검증           — NECESSITY/AUTHENTICITY/EMPATHY/POTENCY
-#   M4  Sub-genre OVERRIDE 4종      — ROMCOM/MOBFILM/DRUGFILM/CONMAN
-#   M5  Profession Pack 이식        — 19개 직업 카테고리 (Creator Engine 동기화)
-#   M6  Chapter Signature System   — Opening/Closing Signature 필드
-#   M7  Reader Retention Curve     — Unit 3/7/10 강제 배치
-#   M8  POV Discipline             — 시점 위반 HARD CONSTRAINT
-#   M9  Period Pack 이식            — 10개 시대 카테고리 (Creator Engine 동기화)
-#   M10 Profession × Period 교차검증 — 시대별 직업 왜곡 방지
-#
-# © 2026 BLUE JEANS PICTURES. All rights reserved.
-# ─────────────────────────────────────────────────────────────
+import os
+import re
+from io import BytesIO
+from typing import Optional, List
 
-# Profession Pack (v3.0 / M5)
+import streamlit as st
+
 try:
-    from profession_pack import (
-        build_profession_block,
-        build_multi_profession_block,
-        detect_profession_category,
-    )
-    _PROFESSION_PACK_AVAILABLE = True
+    import anthropic
 except ImportError:
-    _PROFESSION_PACK_AVAILABLE = False
-    def build_profession_block(profession_text, character_name=""): return ""
-    def build_multi_profession_block(characters): return ""
-    def detect_profession_category(profession_text): return []
+    anthropic = None
 
-# Period Pack (v3.0 / M9)
+from docx import Document
+
+from prompt import (
+    SYSTEM_PROMPT,
+    STYLE_DNA_ANALYSIS_PROMPT,
+    build_locked_block,
+    build_merge_analysis_prompt,
+    build_gap_diagnosis_prompt,
+    build_story_reinforcement_prompt,
+    build_unit_blueprint_prompt,
+    build_unit_draft_prompt,
+    build_unit_rewrite_prompt,
+    build_title_review_prompt,
+    build_epilogue_prompt,
+    build_expand_incomplete_unit_prompt,
+    build_ch1_stage_a_prompt,
+    build_ch1_stage_b_prompt,
+    build_ch1_stage_c_prompt,
+    # v3.0 신규
+    NOVEL_ENGINE_VERSION,
+    NOVEL_ENGINE_BUILD_DATE,
+    NOVEL_ENGINE_VERSION_TAG,
+    get_novel_engine_version_info,
+    _PROFESSION_PACK_AVAILABLE,
+    _PERIOD_PACK_AVAILABLE,
+)
+
+# v3.0 Period Pack 키 목록 (STEP 1 선택지용)
 try:
-    from period_pack import (
-        build_period_block,
-        build_period_block_auto,
-        detect_period_from_locked,
-        get_period_label,
-        get_all_period_keys,
-    )
-    _PERIOD_PACK_AVAILABLE = True
+    from period_pack import get_all_period_keys, get_period_label, detect_period_from_locked
+    PERIOD_KEYS = get_all_period_keys()
 except ImportError:
-    _PERIOD_PACK_AVAILABLE = False
-    def build_period_block(locked_text="", period_keys=None, max_periods=2): return ""
-    def build_period_block_auto(locked_text): return ""
-    def detect_period_from_locked(locked_text): return []
-    def get_period_label(period_key): return ""
-    def get_all_period_keys(): return []
-
-
-# =================================================================
-# [0] v3.0 신규 블록: M1 BJND SCENE ENFORCER
-# =================================================================
-BJND_SCENE_ENFORCER_BLOCK = """
-[★★★ HARD CONSTRAINT — BJND SCENE ENFORCER (v3.0 M1) ★★★]
-이 제약은 최우선이며, 한 Unit 생성 시 아래 수치를 절대 초과하면 안 된다.
-초과 시 자동 재생성 트리거가 발동한다.
-
-1. "있었다" 사용 횟수: Unit당 10회 이하. (v2.5 이전 임계치 15회 → 10회로 강화)
-   - "서류가 쌓여 있었다" → "서류가 테이블을 덮었다" 로 구체 동사 전환.
-   - "켜져 있었다" → "빛을 내뿜었다"
-   - "서 있었다" → "기대어 있었다" 또는 서서 ~했다 구조로.
-
-2. "것이었다" 해설체: Unit당 2회 이하. (v2.5 3회 → 2회로 강화)
-   - "~것이었다" → "~였다"로 줄이거나 서술 구조 재설계.
-
-3. 대사 태그 합계 (말했다+물었다+대답했다): Unit당 12회 이하.
-   - 대사 10개 중 6개 이상은 행동 태그로 대체.
-
-4. "마치 ~처럼" / "~듯했다" / "~같았다": Unit당 1회 이하. (한 문단에 2개 이상이면 실패)
-
-5. 현재형 종결(~한다, ~된다, ~이다): Unit당 3회 이하.
-   - 4회 이상이면 치명적 실패. 모든 서술은 과거형.
-
-★ 재생성 시: 직전 시도의 구체 위반 수치가 프롬프트에 주입된다.
-   예: "직전 생성본에서 '있었다' 13회 사용. 이번엔 8회 이하로." 
-   해당 지시가 주어지면 반드시 그 숫자 이하로 작성하라. ★
-""".strip()
-
-
-# =================================================================
-# [0-2] v3.0 신규 블록: M2 OPENING MASTERY
-# =================================================================
-OPENING_MASTERY_BLOCK = """
-[OPENING MASTERY — 오프닝 장인 정신 (v3.0 M2, Creator Engine v2.3.10 동기화)]
-
-★ 핵심 원칙 3가지 ★
-
-[1] 장르 = 오프닝 DNA
-Chapter 1의 오프닝은 장르 자체를 체현해야 한다.
-- 범죄/스릴러: 사건의 결과(시체·사고·파국)부터. 질문은 "어떻게?"
-- 드라마: 관계의 긴장·결함이 구체 장면으로. 질문은 "왜 이 사람은?"
-- 액션: 위기 상황 한가운데서 시작. 질문은 "살아남을 수 있을까?"
-- 로맨스: 두 인물의 첫 마찰 또는 설렘. 질문은 "이 관계는 어떻게 될까?"
-- 코미디: 주인공의 코믹 결함이 첫 장면에 노출. 질문은 "이 사람 괜찮나?"
-- 호러: 일상의 미세한 균열. 질문은 "뭔가 잘못됐다"
-- SF: 세계의 규칙 하나를 보여준다. 질문은 "이 세상은 어떻게 작동하는가?"
-- 판타지: 주인공을 이 세계에 귀속시키는 장면. 질문은 "이 세계의 운명은?"
-- 역사: 시대의 압력이 인물에게 가해지는 순간. 질문은 "이 시대를 어떻게 살아낼까?"
-
-[2] 두 번째 장르가 복합 본질을 결정
-장르가 두 개 이상이면(예: 금융 스릴러 + 로맨스), 첫 번째 장르가 오프닝 DNA.
-두 번째 장르는 Stage B(WORLD) 또는 Stage C(LOSS)에서 진입한다.
-- "금융 스릴러 + 로맨스" → 오프닝은 스릴러 DNA(딜, 압박, 숫자). 로맨스는 Stage B에서.
-- "역사 드라마 + 미스터리" → 오프닝은 역사 드라마 DNA(시대의 압력). 미스터리는 Stage C에서.
-
-[3] ★ 오프닝 도파민 ≠ 발단 사건 ★
-오프닝 도파민(독자를 낚는 매혹)과 발단 사건(inciting incident, 주인공의 여정을 강제하는 촉발 사건)은 다르다.
-- PEAK(오프닝 도파민): 주인공이 정상에 있는 상태의 매혹. 독자는 이 인물을 "보고 싶어진다."
-- LOSS(발단 사건): PEAK를 깨뜨리는 균열. 주인공이 여정을 시작하게 만든다.
-- Chapter 1 Stage A는 도파민. 발단 사건은 Stage C에서 점화.
-- 둘을 한 장면에 섞지 마라. Stage A에서 발단 사건을 쓰면 매혹이 없고, Stage C에서 PEAK만 쓰면 동력이 없다.
-
-★ 오프닝 도파민의 3가지 조건 ★
-- 구체적: 추상이 아니라 손에 잡히는 디테일로 정상을 보여준다.
-- 감각적: 소리·냄새·촉감 중 최소 3개 채널을 연다.
-- 인물적: 이 행위가 오직 이 인물만이 할 수 있는 방식이어야 한다. (Tactics = Character)
-""".strip()
-
-
-# =================================================================
-# [0-3] v3.0 신규 블록: M3 BJND 4축 자기검증
-# =================================================================
-BJND_SELF_VERIFICATION_BLOCK = """
-[BJND 4축 자기검증 — Unit 설계 직후 필수 자체 채점 (v3.0 M3)]
-
-각 Unit 설계안을 작성한 직후, 아래 4축으로 스스로 채점하라.
-각 축 0~5점. 합계 14점 미만 Unit은 재설계 대상이다.
-
-[NECESSITY — 필요성] (0~5)
-이 Unit이 없으면 서사가 무너지는가?
-- 0: 생략해도 서사가 성립함
-- 3: 있으면 좋지만 대체 가능
-- 5: 생략 불가능. 이 Unit 없이 다음 Unit이 성립하지 않음
-
-[AUTHENTICITY — 진정성] (0~5)
-인물 행동이 Goal/Need(BJND)에서 유기적으로 나오는가?
-- 0: 플롯 편의를 위한 부자연스러운 행동
-- 3: 맥락상 허용 가능하나 필연성 약함
-- 5: 인물의 욕망·결핍에서 필연적으로 도출됨
-
-[EMPATHY — 감정이입] (0~5)
-독자가 감정이입할 지점이 이 Unit 안에 있는가?
-- 0: 전달은 되지만 감정 자극이 없음
-- 3: 최소 1개 감정이입 지점
-- 5: 복수의 감정 층위. 독자가 인물과 함께 떨리거나 흔들림
-
-[POTENCY — 추진력] (0~5)
-다음 Unit으로 끌고 가는 힘이 있는가? (Hook → Punch → Cliffhanger)
-- 0: Unit이 닫혀서 끝남. 페이지를 덮고 싶게 만듦
-- 3: 다음 Unit 궁금증 유발
-- 5: 다음 Unit을 읽지 않고는 못 배길 Punch
-
-★ 출력 형식 ★
-각 Unit 설계 하단에 다음을 덧붙여라:
-[BJND 4축 자기채점]
-- NECESSITY: N점 / 이유
-- AUTHENTICITY: N점 / 이유
-- EMPATHY: N점 / 이유
-- POTENCY: N점 / 이유
-- 합계: N점
-- 판정: 재설계 필요 / 통과 / 강함
-
-★ 합계 14점 미만이면 재설계 필요하다고 명시하고, 무엇을 어떻게 강화할지 2~3줄로 제시하라. ★
-""".strip()
-
-
-# =================================================================
-# [0-4] v3.0 신규 블록: M7 READER RETENTION CURVE
-# =================================================================
-READER_RETENTION_CURVE_BLOCK = """
-[READER RETENTION CURVE — 독자 이탈 곡선 (v3.0 M7)]
-
-상업소설 독자 이탈 피크는 Unit 3, 7, 10에 몰린다.
-각 피크 지점에 강제 배치되어야 할 서사 장치는 다음과 같다.
-
-[Unit 3 — 첫 이탈 피크]
-독자가 "이 책을 계속 읽을 가치가 있는가"를 판단하는 지점.
-★ 강제 배치: Twist L2 (관계 층위 반전). 인물 간 알려졌던 관계의 새로운 면이 드러난다.
-- 예: 동맹이 의심스러워지거나, 적이 생각보다 복잡하거나, 조력자에게 다른 목적이 있음.
-- Unit 3 설계에 반드시 "Twist L2"를 명시하고 반영하라.
-
-[Unit 7 — 중간 이탈 피크]
-미드포인트. 독자가 "이야기가 어디로 가는가"를 체감해야 하는 지점.
-★ 강제 배치: Betrayal B2 (중간 배신) + Cliffhanger C1~C3 중 선택.
-- B2: 주인공의 판단이 틀렸음이 드러남. 배신자의 정체 또는 동기가 밝혀짐.
-- C1(위협)/C2(발견)/C3(결정) 중 하나로 Unit을 닫아라.
-- Unit 7 설계에 반드시 "Betrayal B2 + Cliffhanger C1~C3"를 명시하라.
-
-[Unit 10 — 후반 이탈 피크]
-클라이맥스 직전. 독자가 "이 결말이 납득되는가"를 준비하는 지점.
-★ 강제 배치: Twist L4 (세계 구조 반전) + Information Layer 폭로.
-- L4: 이 이야기의 숨겨진 구조가 드러남. 1막부터 심어둔 Plant들이 Payoff됨.
-- 독자가 "지금까지의 사건이 다 이 때문이었구나" 싶은 깨달음.
-- Unit 10 설계에 반드시 "Twist L4 + Information Layer 폭로"를 명시하라.
-
-★ 위 3개 Unit은 다른 Unit보다 구조적 밀도가 높아야 하며, Hook·Punch가 가장 강해야 한다. ★
-""".strip()
-
-
-# =================================================================
-# [0-5] v3.0 신규 블록: M8 POV DISCIPLINE
-# =================================================================
-def build_pov_discipline_block(pov: str) -> str:
-    """시점 기반 HARD CONSTRAINT 블록 생성 (v3.0 M8)"""
-    pov = (pov or "").strip()
-
-    if "1인칭" in pov:
-        return """
-[★ POV DISCIPLINE — 1인칭 시점 규칙 (v3.0 M8) ★]
-이 작품은 1인칭 시점이다. 아래 규칙은 HARD CONSTRAINT다.
-
-1. 주인공(나)이 직접 보거나 듣거나 느낀 것만 서술할 수 있다.
-2. 다른 인물의 내면을 절대 서술하지 마라. ("그는 슬퍼졌다" 금지)
-3. 다른 인물의 감정은 외양, 행동, 대사로만 전달하라.
-   BAD: "세웅은 마음속으로 유진을 의심했다."
-   GOOD: "세웅은 유진을 한참 바라보다 시선을 돌렸다. 찻잔을 드는 손끝이 살짝 떨렸다."
-4. "내가 보지 못한 장면"을 서술하지 마라. 전언·서신·뉴스 등 매개체를 통해서만 가능.
-5. 주인공이 모르는 정보는 작가도 모른다. 독자에게 설명하지 마라.
-
-위반 시 치명적 실패로 간주한다.
-""".strip()
-
-    if "3인칭 제한" in pov:
-        return """
-[★ POV DISCIPLINE — 3인칭 제한 시점 규칙 (v3.0 M8) ★]
-이 작품은 3인칭 제한 시점이다. 아래 규칙은 HARD CONSTRAINT다.
-
-1. 각 Unit의 시점 인물(POV character) 1명을 명확히 설정하라.
-2. 그 Unit 안에서는 POV 인물의 내면만 서술한다.
-3. 다른 인물의 내면을 서술하면 시점 위반(head-hopping)이다.
-   BAD: "유진은 화가 났다. 세웅은 그녀를 이해하려 애썼다." (한 장면 안에서 두 명의 내면 서술)
-   GOOD: "유진은 화가 났다. 세웅은 말없이 그녀를 바라봤다. 테이블 밑에서 손을 꽉 쥐었다." (세웅의 내면은 외양으로만)
-4. Unit 경계에서 POV 전환은 허용. 단, 블루프린트에 "이 Unit의 POV는 ○○"라고 명시된 경우만.
-5. 한 Unit 안에서 POV 전환은 금지. 예외: [CUT] 컷어웨이 장면. 이 경우 빈 줄로 확실히 분리.
-
-위반 시 치명적 실패로 간주한다.
-""".strip()
-
-    if "듀얼" in pov or "다중" in pov:
-        return """
-[★ POV DISCIPLINE — 듀얼/다중 시점 규칙 (v3.0 M8) ★]
-이 작품은 듀얼/다중 시점이다. 아래 규칙은 HARD CONSTRAINT다.
-
-1. 각 Unit 또는 각 장면 블록의 POV 인물을 명시적으로 설정하라.
-2. 장면 블록 안에서는 한 인물의 내면만 서술한다. (head-hopping 금지)
-3. POV 전환은 빈 줄 + 장면 경계에서만 허용.
-4. 같은 Unit 안에서 POV를 3명 이상 돌리면 독자가 정서 앵커를 잃는다. Unit당 최대 2개 POV.
-5. 각 POV 인물의 정보 비대칭(독자는 알고 POV 인물은 모르는 것)을 의도적으로 설계하라.
-
-위반 시 치명적 실패로 간주한다.
-""".strip()
-
-    return ""
-
-
-# =================================================================
-# [0-6] v3.0 신규 블록: M4 SUB-GENRE OVERRIDE 4종
-# =================================================================
-SUBGENRE_OVERRIDE_ROMCOM = """
-[ROMCOM 서브장르 오버라이드 — Romantic Comedy (v3.0 M4)]
-
-1. 스크루볼 DNA: 두 주인공의 대사가 탁구처럼 빠르게 오간다. 대사 리듬이 로맨스의 엔진.
-2. 오해-폭로 리듬: 오해가 쌓이고 터지고 다시 쌓이는 진자 운동. 2막에 최소 2회.
-3. 소설적 상향: 행동 태그 기본 유지하되, 대사 길이를 영화/드라마보다 길게 확장 가능.
-4. 코믹 결함이 연애 결함과 동형: 주인공의 성격 결함이 곧 연애를 망치는 이유.
-5. Beats: Meet Cute → Adorable Tension → Big Misunderstanding → Grand Gesture.
-6. Stakes는 수치·체면·자존심. 목숨이 아니라 "이 사람 앞에서 망신당할까봐"가 긴장.
-""".strip()
-
-SUBGENRE_OVERRIDE_MOBFILM = """
-[MOBFILM 서브장르 오버라이드 — Mob/Yakuza/Gangster (v3.0 M4)]
-
-1. 폭력의 일상성: 폭력이 특별한 사건이 아니라 일상 업무로 제시된다. 담담한 과거형.
-2. 의리-배신 2축: 모든 관계는 의리 vs 배신의 긴장 위에 놓인다. 제3의 축 없음.
-3. 권력 서열 명시: 조직 위계(보스/중간보스/행동대/말단)가 항상 시각적으로 드러난다. 앉는 자리, 먼저 말하는 순서.
-4. 명예의 규칙: 조직 내부 규칙이 법보다 상위다. 이 규칙을 어기는 순간이 전환점.
-5. 대사는 짧고 건조. 감정을 대사로 풀지 마라. 침묵, 시선, 술잔, 담배가 더 많이 말한다.
-6. 공간: 특정 장소의 고정(특정 술집, 특정 방)이 정서적 앵커. 반복 등장으로 의미 누적.
-""".strip()
-
-SUBGENRE_OVERRIDE_DRUGFILM = """
-[DRUGFILM 서브장르 오버라이드 — Drug/Addiction (v3.0 M4)]
-
-1. 중독 타임라인: 첫 경험(매혹) → 일상화 → 통제 상실 → 파괴의 4단계를 명확히 설계.
-2. 감각 왜곡 묘사 허용: 시간 지연, 공감각, 과잉 집중 등 비일상 지각을 묘사해도 된다.
-   단, A2(격언조 심리) 금지는 유지. 감각을 감각으로 쓰되 관념으로 환원 금지.
-3. 중독의 경제학: 돈·시간·관계가 약물에 어떻게 빨려들어가는지 수치와 장면으로.
-4. 공모와 고립의 역설: 함께 쓰는 사람들과 가까워지며 가족·친구에게서 멀어진다.
-5. 회복 서사를 미화하지 마라. 재발, 죄책감, 몸의 고통이 함께 가야 한다.
-6. 금지: "이것은 일탈이 아니라 탐구였다" 류의 자기합리화 독백을 서술자가 옹호하지 마라.
-""".strip()
-
-SUBGENRE_OVERRIDE_CONMAN = """
-[CONMAN 서브장르 오버라이드 — Con Artist/Heist (v3.0 M4)]
-
-1. Information Layer I1~I4 강제: 독자와 빌런(또는 사기꾼)의 정보 비대칭이 엔진.
-2. 독자가 속고 있다가 마지막에 "아 그래서 그랬구나" 깨닫는 이중 구조 필수.
-3. 준비 → 실행 → 반전의 3단 구조. 반전은 최소 2중(속은 줄 알았는데 속였고, 다시 속았다).
-4. 디테일의 현실감: 사기의 기술(서류, 계좌, 신분, 심리)이 실제로 작동 가능해 보여야 한다.
-5. 공범 관계의 배신: 같이 사기를 친 사람들 사이의 의심·배신이 부차 플롯.
-6. 독자에게 "지금 보는 장면이 누구의 관점에서 조작된 것인지" 의문을 심어라.
-7. 금지: 우연에 기댄 성공. 모든 반전은 사전에 설계된 것이어야 한다(사후 플래시백으로 공개 가능).
-""".strip()
-
-
-def get_subgenre_override(genre: str) -> str:
-    """장르 문자열에서 서브장르 오버라이드 블록 반환 (v3.0 M4)"""
-    g = (genre or "").lower()
-    overrides = []
-    # ROMCOM (로맨틱 코미디 / 롬코)
-    if ("롬코" in g) or ("로맨틱 코미디" in g) or ("romcom" in g) or ("rom-com" in g):
-        overrides.append(SUBGENRE_OVERRIDE_ROMCOM)
-    # MOBFILM (조폭/야쿠자/갱스터/마피아)
-    if any(k in g for k in ["조폭", "야쿠자", "갱스터", "마피아", "mob", "gangster", "yakuza"]):
-        overrides.append(SUBGENRE_OVERRIDE_MOBFILM)
-    # DRUGFILM (마약/중독)
-    if any(k in g for k in ["마약", "중독", "drug", "addiction"]):
-        overrides.append(SUBGENRE_OVERRIDE_DRUGFILM)
-    # CONMAN (사기/케이퍼/헤이스트)
-    if any(k in g for k in ["사기", "케이퍼", "헤이스트", "conman", "con artist", "heist"]):
-        overrides.append(SUBGENRE_OVERRIDE_CONMAN)
-    return "\n\n".join(overrides)
-
-
-# =================================================================
-# [0-7] v3.0 신규 블록: M10 Profession × Period 교차검증
-# =================================================================
-PROFESSION_PERIOD_CROSS_CHECK_BLOCK = """
-[PROFESSION × PERIOD 교차검증 — 시대별 직업 왜곡 방지 (v3.0 M10)]
-
-시대와 직업이 동시에 주입된 경우, 아래 교차 규칙을 반드시 준수하라.
-
-[시대별 직업 제약]
-- 조선 전기/중기/후기: 현대적 의미의 '검사·변호사·기자·의사(양의)' 없음.
-  → 관직(의금부·사간원·사헌부), 의원(醫員, 한의), 천문관 등 시대 직업으로 대체.
-- 구한말(1876~1910): 양의·신식 법조인·신문기자가 태동하는 시기.
-  → '의사' 표기는 대한제국 관립의학교 졸업자 이후부터 가능. 변호사는 1905년 이후.
-- 일제강점기: 법조인은 조선총독부 체계. '검사(檢事)'는 일본 제국 법체계.
-  → 언론은 조선일보·동아일보 창간(1920) 이후부터. 그 전은 대한매일신보 등.
-- 해방정국(1945~1948): 미군정 체계. 경찰·군·검찰의 정체성이 이중(친일 잔재 + 신체제).
-- 한국전쟁(1950~1953): 직업 활동 자체가 전쟁에 종속. 의사=군의관/야전의료, 기자=종군기자.
-- 개발독재기(1961~1987): 현대적 직업 체계 확립. 단, 정보기관(중정·안기부)의 그림자.
-- 민주화기(1987~1999): 현대 한국 직업 체계의 성립기. IMF(1997) 전후가 분기점.
-
-[전문 용어 시대 체크]
-- "부장검사", "로펌 파트너", "어소시에이트" → 1980년대 이후에만 유효.
-- "PD", "편집국장" → 방송국은 1960년대 이후. 그 전은 "주필", "논설위원".
-- "인턴", "레지던트" 호칭 → 1980년대 이후. 그 전은 "수련의", "전공의".
-- "M&A", "펀드", "투자은행" → 1990년대 이후. IMF 이후 본격화.
-
-[자연스러움 검증]
-- 해당 시대에 그 직업이 존재했는가?
-- 존재했다면 현대와 같은 형태인가, 다른 형태인가?
-- 다르다면 시대에 맞는 명칭·절차·호칭을 쓰고 있는가?
-- 전문 용어를 썼다면 그 용어가 해당 시대에 실제 사용되었는가?
-
-★ 확신이 없으면 현대적 전문 용어 대신 해당 시대의 보편 표현을 쓰라. ★
-""".strip()
-
-
-# =================================================================
-# [1] LOCKED SYSTEM (v1.5 sync from Creator Engine)
-# =================================================================
-LOCKED_SYSTEM_RULES = """
-[LOCKED SYSTEM — 확정 설정 보호 규칙]
-
-★ 이 규칙은 모든 창작 규칙보다 상위다. 더 재미있는 이야기를 위해서라도 LOCKED 항목을 변경할 수 없다. ★
-
-[LOCKED 태그 규칙]
-사용자가 <LOCKED>...</LOCKED> 태그로 감싼 항목은 절대 변경 불가다.
-- 캐릭터의 소속, 이름, 나이, 직책을 바꾸지 마라.
-- 캐릭터 간 핵심 관계(적대/동맹/혈연 등)를 바꾸지 마라.
-- 세계관의 조직 구조, 규칙, 시간축을 바꾸지 마라.
-- 기획의도에 명시된 테마와 사회적 맥락을 삭제하지 마라.
-- 확정된 플롯 포인트(사건 순서, 촉발 사건, 결말)를 재해석하거나 변형하지 마라.
-
-[OPEN 태그 규칙]
-사용자가 <OPEN>...</OPEN> 태그로 감싼 항목은 창작 가능하다.
-- 캐릭터 외형, 습관, 말투 디테일 확장
-- 장면별 감정 변화와 묘사
-- 대사의 구체적 워딩
-- B-Story의 세부 전개
-- 장면 내 디테일과 감각 묘사
-
-[LOCKED 검증 — 매 출력 전 반드시 수행]
-□ LOCKED 블록의 모든 캐릭터가 원본 소속/직책 그대로인가?
-□ LOCKED 블록의 핵심 관계가 변경되지 않았는가?
-□ LOCKED 블록의 기획의도 키워드가 출력에 반영되었는가?
-□ LOCKED 블록의 플롯 포인트가 순서와 내용 그대로 유지되는가?
-1건이라도 불일치하면 해당 부분을 LOCKED 원본으로 되돌려라.
-""".strip()
-
-def build_locked_block(locked_items=None, open_items=None):
-    result = ""
-    if locked_items and locked_items.strip():
-        result += f"<LOCKED>\n{locked_items.strip()}\n</LOCKED>\n\n"
-    if open_items and open_items.strip():
-        result += f"<OPEN>\n{open_items.strip()}\n</OPEN>\n\n"
-    return result
-
-# =================================================================
-# [2] 10장르 RULE PACK (Creator Engine v1.5 sync)
-# =================================================================
-GENRE_RULES = {
-    "범죄/스릴러": {
-        "core": "정보 비대칭과 압박, 도덕적 모호함 속 타락과 생존 대가.",
-        "opening": "사건의 결과부터 — 시체/범죄 현장/파국을 먼저 보여주고 '어떻게?'로 끈다.",
-        "hook_rule": "매 장면 끝에 새로운 의문 또는 위협이 제시되어야 한다.",
-        "punch_rule": "인물의 선택이 돌이킬 수 없는 결과를 만드는 순간.",
-        "must_have": ["초반 10페이지 내 범죄/사건 발생","독자가 범인보다 한 발 늦게 알아채는 구조","미드포인트에서 게임의 룰이 바뀌는 반전","클라이맥스 직전 2중 반전"],
-        "forbidden": "설명적 회상 남발, 독백으로 사건 정리, 우연의 일치로 범인 발각",
-        "fails": ["압박 약함","선악 명확","분위기만 있고 서사 압력 없음","반전 억지"],
-        "genre_fun": "독자가 '제발 뒤를 봐!'라고 속으로 외치게 만드는 정보 비대칭과 도덕적 긴장"
-    },
-    "드라마": {
-        "core": "인간의 선택과 대가를 통해 진실에 도달하는 장르.",
-        "opening": "고요한 균열 — 평범한 일상인데 뭔가 하나가 어긋나 있다.",
-        "hook_rule": "감정적 긴장의 실을 끊지 않는다. 매 장면 끝에 해결되지 않은 감정적 질문.",
-        "punch_rule": "punch는 폭발이 아니라 침묵. 말하지 못하는 것, 또는 마침내 말해버리는 것.",
-        "must_have": ["주인공의 내면 결핍이 외부 사건과 충돌하는 도입","관계의 균열이 극대화되는 미드포인트","진짜 감정이 터지는 고백/대결 장면","변화가 행동으로 증명되는 결말"],
-        "forbidden": "감정을 직접 설명하는 서술, 갈등 없는 화해",
-        "fails": ["감정이 표면적","인물이 평면적","관계 변화 없음","대가 부재"],
-        "genre_fun": "독자가 인물의 선택 앞에서 '나라면 어떻게 할까'를 고민하게 만드는 것"
-    },
-    "액션": {
-        "core": "물리적 목표와 대가 속에서 캐릭터 의지를 증명하는 장르.",
-        "opening": "미션 진행 중 — 설명 없이 체이스, 전투, 작전 한복판에서 시작.",
-        "hook_rule": "물리적 위협과 시간 압박이 매 장면을 관통한다.",
-        "punch_rule": "예상을 깨는 전술 변화 또는 환경 변화. 같은 패턴 반복 금지.",
-        "must_have": ["주인공의 전투 능력을 보여주는 오프닝 액션","스케일이 커지는 액션 시퀀스","미드포인트에서 패배 또는 배신","최종 대결"],
-        "forbidden": "설명으로 처리하는 액션, 무의미한 전투 반복, 빌런의 동기 없는 폭력",
-        "fails": ["목표 흐림","공간 안 보임","액션 후 대가 없음"],
-        "genre_fun": "독자가 '어떻게 이걸 해결하지?'라고 조마조마하는 전술적 긴장"
-    },
-    "로맨스": {
-        "core": "갈망의 축적과 감정의 지연이 만드는 아픔과 회수의 장르.",
-        "opening": "운명적 접점 또는 이별 직후 — 두 사람이 스쳐가거나 이미 끝난 관계에서 시작.",
-        "hook_rule": "두 사람 사이의 긴장(끌림+저항)이 매 장면에서 진동해야 한다.",
-        "punch_rule": "감정의 급반전 — 가까워지다가 벽이 생기는 순간.",
-        "must_have": ["첫 만남의 설렘 또는 마찰이 있는 도입","감정 접근 후 오해/장벽으로 멀어지는 미드포인트","진심 고백 또는 희생의 클라이맥스","관계의 새로운 균형을 보여주는 결말"],
-        "forbidden": "삼각관계의 기계적 반복, 오해가 대화 한마디로 해결",
-        "fails": ["고백만 많고 축적 없음","끌림 이유 불명","감정 온도 단조"],
-        "genre_fun": "독자가 두 사람의 손이 닿기 직전에 숨을 멈추게 되는 감정 지연"
-    },
-    "코미디": {
-        "core": "웃음 메커니즘이 작동하는 장르. 떠드는 장르가 아니다.",
-        "opening": "결함 폭발 — 주인공의 결함이 첫 장면에서 사고를 친다.",
-        "hook_rule": "웃음 후 즉시 다음 상황 예고. '이거 어떻게 빠져나가지?'",
-        "punch_rule": "인물이 독자의 예측과 정반대로 행동하는 순간.",
-        "must_have": ["도입에서 코믹 톤 확립","주인공의 결점이 웃음의 원천","미드포인트에서 거짓말/오해가 극대화","클라이맥스에서 모든 거짓말이 동시에 터지는 구조"],
-        "forbidden": "상황 설명으로 웃기려는 시도, 같은 개그 반복, 인물 비하로 웃음 유발",
-        "fails": ["설정 안 웃김","캐릭터 결함이 웃음 비생산","농담이 서사 정지"],
-        "genre_fun": "독자가 '저러다 큰일 나겠다'면서 멈출 수 없이 읽게 되는 에스컬레이션"
-    },
-    "호러/공포": {
-        "core": "공포의 예감과 축적으로 안전감을 체계적으로 파괴하는 장르.",
-        "opening": "프롤로그 킬 — 본편 시작 전에 누군가 죽거나 사라진다. 또는 '뭔가 이상하다'는 감각.",
-        "hook_rule": "매 장면 끝에 '안전하다고 생각한 순간' 새로운 위협의 징후.",
-        "punch_rule": "jump scare와 slow burn 반드시 교차 배치.",
-        "must_have": ["일상의 균열을 보여주는 불안한 오프닝","규칙 발견 — 이 공포의 작동 방식","규칙 위반 — 공포 극대화","최종 대면 — 공포의 실체와 직접 대결"],
-        "forbidden": "설명으로 무서움을 전달, 공포 원인의 과잉 설명",
-        "fails": ["놀람만 있고 공포 축적 없음","위협 규칙 모호","불안이 장면 밖으로 안 이어짐"],
-        "genre_fun": "독자가 페이지를 넘기기 무서우면서도 멈출 수 없게 만드는 공포의 예감"
-    },
-    "SF": {
-        "core": "세계의 규칙이 인간 드라마의 은유로 작동하는 장르.",
-        "opening": "세계 규칙 한 장면 — 이 세계가 우리와 다르다는 것을 첫 이미지로 보여준다.",
-        "hook_rule": "세계관의 새로운 측면이 매 장면에서 하나씩 드러나야 한다. 정보 과부하 금지.",
-        "punch_rule": "세계관 규칙의 예상치 못한 적용 — '이 기술이 이렇게도?'",
-        "must_have": ["세계관의 핵심 규칙을 자연스럽게 보여주는 도입","규칙이 만드는 딜레마","미드포인트에서 세계관의 진실이 뒤집히는 반전","기술/환경의 논리 안에서 해결되는 클라이맥스"],
-        "forbidden": "세계관 설명을 위한 강의식 서술, 데우스 엑스 마키나",
-        "fails": ["룰 설명만 많음","인간 드라마 약함","세계관이 이야기보다 앞섬"],
-        "genre_fun": "독자가 '이 세계에서는 그게 가능해?'라며 규칙을 이해해가는 발견의 쾌감"
-    },
-    "판타지": {
-        "core": "마법의 규칙과 대가가 인간 성장의 은유로 작동하는 장르.",
-        "opening": "평범한 세계에서 판타지 세계로의 전환 — 문턱 넘기의 순간.",
-        "hook_rule": "새로운 세계의 경이로움과 위험이 동시에 제시되어야 한다.",
-        "punch_rule": "마법/능력의 예상치 못한 대가 — 힘을 쓸수록 잃는 것이 커지는 구조.",
-        "must_have": ["문턱 넘기(세계 전환)","마법/능력의 규칙과 대가 설정","멘토의 퇴장 또는 배신","내면의 성장이 외부 승리로 연결"],
-        "forbidden": "대가 없는 만능 마법, 예언에 의한 수동적 전개, 악의 동기 없는 빌런",
-        "fails": ["대가 없는 능력","설명 과잉","인간 드라마 약함"],
-        "genre_fun": "독자가 새로운 세계의 규칙을 함께 발견하며 성장을 목격하는 쾌감"
-    },
-    "역사": {
-        "core": "시대의 압박 속 개인의 선택이 역사의 결과를 바꾸는 장르.",
-        "opening": "시대 설정 — 첫 장면에서 이 시대가 우리 시대와 다른 점을 감각적으로 보여준다.",
-        "hook_rule": "역사적 사건의 카운트다운이 서사 압박으로 작동한다.",
-        "punch_rule": "역사적 결과를 알고 있는 독자의 아이러니를 활용한 긴장.",
-        "must_have": ["시대의 감각(냄새/소리/물건)이 살아있는 도입","역사적 사건이 인물의 선택을 압박","미드포인트에서 역사의 방향이 개인과 충돌","역사적 결과와 개인적 결말의 교차"],
-        "forbidden": "역사 교과서식 설명, 현대적 가치관의 무비판적 투사",
-        "fails": ["고증만 있고 드라마 없음","인물이 역사 속에 매몰","시대 배경이 장식"],
-        "genre_fun": "독자가 '역사가 이렇게 돌아갈 줄이야'하며 결말을 알면서도 긴장하는 것"
-    },
-    "미지정": {
-        "core": "장르 무관, 보편적 서사 원칙으로 작동하는 이야기.",
-        "opening": "독자의 호기심을 잡는 훅 — 장르 상관없이 첫 3페이지가 관건.",
-        "hook_rule": "매 장면 끝에 다음 장면으로 끌어당기는 질문 또는 위협.",
-        "punch_rule": "핵심 장면마다 예상을 깨는 순간.",
-        "must_have": ["명확한 도입 훅","미드포인트 반전","클라이맥스 대결/대면","변화가 증명되는 결말"],
-        "forbidden": "설명적 전개, 갈등 없는 진행, 우연에 의한 해결",
-        "fails": ["갈등 약함","전환 없음","결말 억지"],
-        "genre_fun": "독자가 페이지를 넘기지 않을 수 없게 만드는 서사 추진력"
-    },
+    PERIOD_KEYS = []
+    def get_period_label(k): return ""
+    def detect_period_from_locked(t): return []
+
+# v3.1 시나리오 → 소설화 추출 모듈
+try:
+    from scenario_extractor import (
+        extract_text_from_docx,
+        extract_text_from_txt,
+        analyze_scenario_structure,
+        extract_scenario_fields,
+        build_unit_mapping_text,
+        SCENARIO_EXTRACTOR_VERSION,
+    )
+    _SCENARIO_EXTRACTOR_AVAILABLE = True
+except ImportError:
+    _SCENARIO_EXTRACTOR_AVAILABLE = False
+    def extract_text_from_docx(b): return ""
+    def extract_text_from_txt(b): return ""
+    def analyze_scenario_structure(t): return {}
+    def extract_scenario_fields(t, c, **kw): return {"_error": "scenario_extractor 미로드"}
+    def build_unit_mapping_text(m): return ""
+    SCENARIO_EXTRACTOR_VERSION = "미로드"
+
+# ─────────────────────────────────────
+# CONFIG
+# ─────────────────────────────────────
+APP_TITLE = "NOVEL ENGINE"
+APP_SUB = "NOVEL WRITER STUDIO v3.0"
+
+DEFAULT_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+MODEL_OPUS = os.getenv("ANTHROPIC_MODEL_OPUS", "claude-opus-4-20250514")
+MAX_TOKENS_SHORT = 4000
+MAX_TOKENS_MID = 6000
+MAX_TOKENS_LONG = 8192
+
+# v3.0 M1: BJND Scene Enforcer 임계치 (사전 차단 + 자동 재생성 트리거)
+BJND_THRESHOLDS = {
+    "있었다": 10,        # v2.5는 15 → v3.0은 10 (강화)
+    "것이었다": 2,       # v2.5는 3 → v3.0은 2 (강화)
+    "대사태그": 12,      # 말했다+물었다+대답했다 합계
+    "마치처럼": 1,       # "마치~처럼"/"~듯했다"/"~같았다" 합계
+    "현재형": 3,         # 현재형 종결 (치명적)
 }
 
-GENRE_KEYWORD_MAP = [
-    (["범죄","느와르","noir","crime","첩보","스파이"],"범죄/스릴러"),
-    (["스릴러","thriller","미스터리","mystery","서스펜스","금융"],"범죄/스릴러"),
-    (["액션","action","전쟁","war","무협"],"액션"),
-    (["멜로","로맨스","romance","melo","love"],"로맨스"),
-    (["코미디","comedy","로코","rom-com","블랙코미디"],"코미디"),
-    (["호러","horror","공포","오컬트","occult"],"호러/공포"),
-    (["sf","sci-fi","사이버펑크","타임"],"SF"),
-    (["판타지","fantasy","이세계","마법"],"판타지"),
-    (["역사","사극","시대극","historical"],"역사"),
-    (["드라마","drama","가족","성장","human"],"드라마"),
+AUTO_REGEN_MAX_RETRIES = 1  # 자동 재생성 시도 최대 횟수
+
+UNIT_TARGET_LENGTHS = {
+    1: 7000, 2: 7000, 3: 8000,
+    4: 8000, 5: 8000, 6: 9000,
+    7: 9000, 8: 9000, 9: 8000,
+    10: 8000, 11: 8000, 12: 9000,
+    13: 2500,
+}
+
+UNIT_MIN_LENGTHS = {
+    1: 6000, 2: 6000, 3: 6500,
+    4: 6500, 5: 6500, 6: 7000,
+    7: 7000, 8: 7000, 9: 6500,
+    10: 6500, 11: 6500, 12: 7000,
+    13: 1800,
+}
+
+# ─────────────────────────────────────
+# PAGE
+# ─────────────────────────────────────
+st.set_page_config(
+    page_title="BLUE JEANS | Novel Engine",
+    page_icon="👖",
+    layout="wide",
+)
+
+# ─────────────────────────────────────
+# CSS
+# ─────────────────────────────────────
+st.markdown(
+    """
+<style>
+@import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
+@import url('https://cdn.jsdelivr.net/gh/projectnoonnu/2408-3@latest/Paperlogy.css');
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&display=swap');
+
+:root {
+    --navy: #202A78;
+    --y: #FFCB05;
+    --bg: #F7F7F5;
+    --card: #FFFFFF;
+    --card-border: #DDDDE6;
+    --t: #2A2A3A;
+    --dim: #8A8FA3;
+    --light-bg: #EEEEF6;
+    --display: 'Playfair Display', 'Paperlogy', 'Georgia', serif;
+    --body: 'Pretendard', -apple-system, sans-serif;
+    --heading: 'Paperlogy', 'Pretendard', sans-serif;
+}
+
+html, body, [class*="css"] {
+    font-family: var(--body);
+    color: var(--t);
+    -webkit-font-smoothing: antialiased;
+}
+.stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"],
+[data-testid="stMainBlockContainer"], [data-testid="stHeader"],
+[data-testid="stBottom"] {
+    background-color: var(--bg) !important;
+    color: var(--t) !important;
+}
+.stMarkdown, .stText, .stCode { color: var(--t) !important; }
+h1,h2,h3,h4,h5,h6 {
+    color: var(--navy) !important;
+    font-family: var(--heading) !important;
+}
+p, span, label, div, li { color: var(--t); }
+section[data-testid="stSidebar"] { display: none; }
+
+.stTextInput input, .stTextArea textarea,
+[data-testid="stTextInput"] input, [data-testid="stTextArea"] textarea {
+    background-color: var(--card) !important;
+    color: var(--t) !important;
+    border: 1.5px solid var(--card-border) !important;
+    border-radius: 8px !important;
+    font-family: var(--body) !important;
+    font-size: 0.92rem !important;
+    padding: 0.65rem 0.85rem !important;
+}
+.stTextInput input:focus, .stTextArea textarea:focus,
+[data-testid="stTextInput"] input:focus, [data-testid="stTextArea"] textarea:focus {
+    border-color: var(--navy) !important;
+    box-shadow: 0 0 0 2px rgba(32,42,120,0.08) !important;
+}
+.stTextInput input::placeholder, .stTextArea textarea::placeholder,
+[data-testid="stTextInput"] input::placeholder, [data-testid="stTextArea"] textarea::placeholder {
+    color: var(--dim) !important;
+    font-size: 0.85rem !important;
+}
+.stSelectbox > div > div, [data-baseweb="select"] > div, [data-baseweb="select"] input {
+    background-color: var(--card) !important;
+    color: var(--t) !important;
+    border-color: var(--card-border) !important;
+    border-radius: 8px !important;
+}
+[data-baseweb="popover"], [data-baseweb="menu"], [role="listbox"], [role="option"] {
+    background-color: var(--card) !important;
+    color: var(--t) !important;
+}
+[role="option"]:hover { background-color: var(--light-bg) !important; }
+.stTextInput label, .stTextArea label, .stSelectbox label {
+    color: var(--t) !important;
+    font-weight: 600 !important;
+    font-size: 0.82rem !important;
+    margin-bottom: 0.3rem !important;
+}
+.stButton > button {
+    color: var(--t) !important;
+    border: 1.5px solid var(--card-border) !important;
+    background-color: var(--card) !important;
+    border-radius: 8px !important;
+    font-family: var(--body) !important;
+    font-weight: 700 !important;
+    font-size: 0.88rem !important;
+    padding: 0.55rem 1.2rem !important;
+    transition: all 0.2s;
+}
+.stButton > button:hover {
+    border-color: var(--navy) !important;
+    box-shadow: 0 2px 8px rgba(32,42,120,0.08) !important;
+}
+.stButton > button[kind="primary"],
+.stButton > button[data-testid="stBaseButton-primary"] {
+    background-color: var(--y) !important;
+    color: var(--navy) !important;
+    border-color: var(--y) !important;
+    font-weight: 800 !important;
+}
+.stButton > button[kind="primary"]:hover,
+.stButton > button[data-testid="stBaseButton-primary"]:hover {
+    background-color: #E8B800 !important;
+    box-shadow: 0 2px 12px rgba(255,203,5,0.3) !important;
+}
+.stDownloadButton > button {
+    color: var(--navy) !important;
+    border: 1.5px solid var(--y) !important;
+    background-color: var(--y) !important;
+    border-radius: 8px !important;
+    font-family: var(--body) !important;
+    font-weight: 800 !important;
+    font-size: 0.88rem !important;
+    padding: 0.55rem 1.2rem !important;
+}
+.stExpander, details, details summary {
+    background-color: var(--card) !important;
+    color: var(--t) !important;
+    border: 1px solid var(--card-border) !important;
+    border-radius: 8px !important;
+}
+details[open] > div { background-color: var(--card) !important; }
+
+.header-wrap {
+    text-align: center;
+    padding: 2.5rem 0 0.5rem 0;
+}
+.header {
+    font-size: 0.82rem;
+    font-weight: 700;
+    color: var(--navy);
+    letter-spacing: 0.25em;
+    font-family: var(--body);
+    text-transform: uppercase;
+    margin-bottom: 0.6rem;
+}
+.brand-title {
+    font-size: 2.8rem;
+    font-weight: 900;
+    color: var(--navy);
+    font-family: var(--display);
+    letter-spacing: -0.01em;
+    position: relative;
+    display: inline-block;
+}
+.brand-title::after {
+    content: '';
+    position: absolute;
+    bottom: 2px;
+    left: 0;
+    width: 100%;
+    height: 4px;
+    background: var(--y);
+    border-radius: 2px;
+}
+.sub {
+    font-size: 0.68rem;
+    color: var(--dim);
+    letter-spacing: 0.22em;
+    margin-top: 0.8rem;
+    margin-bottom: 1.8rem;
+    text-transform: uppercase;
+}
+.callout {
+    background: var(--light-bg);
+    border-left: 4px solid var(--navy);
+    padding: 0.9rem 1.1rem;
+    margin: 0.5rem 0 1.2rem 0;
+    border-radius: 0 8px 8px 0;
+    font-size: 0.88rem;
+    color: var(--t);
+}
+.section-header {
+    background: var(--y);
+    color: var(--navy);
+    padding: 0.6rem 1rem;
+    border-radius: 6px;
+    font-weight: 800;
+    font-size: 1rem;
+    font-family: var(--heading);
+    margin: 1.5rem 0 0.8rem 0;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+.small-meta {
+    font-size: 0.78rem;
+    color: var(--dim);
+    margin-top: -0.2rem;
+    margin-bottom: 0.5rem;
+}
+</style>
+""",
+    unsafe_allow_html=True,
+)
+
+# ─────────────────────────────────────
+# STATE
+# ─────────────────────────────────────
+# FIX: unit_drafts 키를 zero-padded 형식("01"~"13")으로 통일
+DEFAULT_STATE = {
+    "style_dna": "",
+    "merged_analysis": "",
+    "gap_diagnosis": "",
+    "story_reinforcement": {"기": "", "승": "", "전": "", "결": ""},
+    "story_reinforcement_merged": "",
+    "unit_blueprints": {
+        "01-02": "",
+        "03-04": "",
+        "05-06": "",
+        "07-08": "",
+        "09-10": "",
+        "11-12": "",
+    },
+    "unit_drafts": {f"{i:02d}" if i < 13 else "13": "" for i in range(1, 14)},
+    "chapter_titles": {f"{i:02d}" if i < 13 else "13": "" for i in range(1, 14)},
+    "ch1_stage_a": "",
+    "ch1_stage_b": "",
+    "ch1_stage_c": "",
+    "unit_summaries": {},
+    "quality_report": {},
+    "character_tracker": {},
+    "title_review": "",
+    "status_message": "",
+    "status_type": "info",
+    # v3.1 시나리오 → 소설화 모드 상태
+    "scenario_text": "",           # 업로드된 시나리오 원문
+    "scenario_stats": {},          # 통계
+    "scenario_extracted": {},      # Sonnet 추출 결과 (dict)
+    "scenario_mapping_text": "",   # STEP 4 주입용 텍스트
+    "scenario_fields_applied": False,  # STEP 1 자동 입력 완료 여부
+}
+
+for k, v in DEFAULT_STATE.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
+
+# ─────────────────────────────────────
+# HELPERS
+# ─────────────────────────────────────
+def get_client() -> Optional["anthropic.Anthropic"]:
+    api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+    if not api_key or anthropic is None:
+        return None
+    return anthropic.Anthropic(api_key=api_key)
+
+
+def llm_call(user_prompt: str, max_tokens: int = MAX_TOKENS_MID, use_opus: bool = False) -> str:
+    client = get_client()
+    if client is None:
+        return (
+            "[오프라인 미리보기 모드]\n\n"
+            "ANTHROPIC_API_KEY가 설정되지 않았거나 anthropic 패키지가 설치되지 않았습니다.\n"
+            "실제 모델 호출 대신 프롬프트 초안만 구성된 상태입니다.\n\n"
+            + user_prompt[:4000]
+        )
+
+    model = MODEL_OPUS if use_opus else DEFAULT_MODEL
+    response = client.messages.create(
+        model=model,
+        max_tokens=max_tokens,
+        system=SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": user_prompt}],
+    )
+
+    parts = []
+    for block in response.content:
+        if getattr(block, "type", None) == "text":
+            parts.append(block.text)
+    return "\n".join(parts).strip()
+
+
+def merge_nonempty(parts: List[str], sep: str = "\n\n") -> str:
+    return sep.join([p.strip() for p in parts if p and p.strip()])
+
+
+def ensure_final_ending(text: str, unit_no: int) -> str:
+    text = (text or "").rstrip()
+    if unit_no in (12, 13) and not text.endswith("끝."):
+        return f"{text}\n\n끝."
+    return text
+
+
+def is_incomplete_text(text: str, unit_no: int) -> bool:
+    txt = (text or "").strip()
+    if not txt:
+        return True
+
+    min_len = UNIT_MIN_LENGTHS.get(unit_no, 6000)
+    if len(txt) < min_len:
+        return True
+
+    valid_endings = [".", "!", "?", "\u201d", "\"", "'", "\u2019", "끝."]
+    if not any(txt.endswith(e) for e in valid_endings):
+        return True
+
+    lines = [line for line in txt.splitlines() if line.strip()]
+    if len(lines) < 12:
+        return True
+
+    return False
+
+
+# ─────────────────────────────────────
+# 품질 자동 체크 (생성 후 즉시 경고) — v3.0 M1 BJND Scene Enforcer 연동
+# ─────────────────────────────────────
+def analyze_unit_quality(text: str) -> dict:
+    """생성된 Unit 원고의 품질 문제를 자동 감지한다.
+    v3.0: BJND 임계치 강화 + 자동 재생성용 violations 구조화 반환.
+
+    Returns:
+        {
+            "issues": [경고 문자열 리스트 — UI 표시용],
+            "stats": {지표명: 값},
+            "violations": {지표키: {count, threshold, severity}},  # v3.0 신규
+            "should_regenerate": bool,  # v3.0 신규 — 자동 재생성 트리거 여부
+        }
+    """
+    import re
+    if not text or not text.strip():
+        return {"issues": [], "stats": {}, "violations": {}, "should_regenerate": False}
+
+    issues = []
+    stats = {}
+    violations = {}  # v3.0 신규: 재생성 트리거용
+
+    # ── 종결어미 반복 (v3.0: "있었다" 15→10, "것이었다" 3→2) ──
+    cnt_isseotda = len(re.findall(r"있었다", text))
+    cnt_geosieotda = len(re.findall(r"것이었다", text))
+    stats["있었다"] = cnt_isseotda
+    stats["것이었다"] = cnt_geosieotda
+
+    if cnt_isseotda > BJND_THRESHOLDS["있었다"]:
+        issues.append(f"⚠️ '있었다' {cnt_isseotda}회 — {BJND_THRESHOLDS['있었다']}회 이하로 줄이세요. 구체 동사로 대체.")
+        violations["있었다"] = {
+            "count": cnt_isseotda,
+            "threshold": BJND_THRESHOLDS["있었다"],
+            "severity": "high",
+        }
+    if cnt_geosieotda > BJND_THRESHOLDS["것이었다"]:
+        issues.append(f"⚠️ '것이었다' 해설체 {cnt_geosieotda}회 — {BJND_THRESHOLDS['것이었다']}회 이하로.")
+        violations["것이었다"] = {
+            "count": cnt_geosieotda,
+            "threshold": BJND_THRESHOLDS["것이었다"],
+            "severity": "high",
+        }
+
+    # ── 대사 태그 반복 ──
+    cnt_said = len(re.findall(r"말했다", text))
+    cnt_asked = len(re.findall(r"물었다", text))
+    cnt_answered = len(re.findall(r"대답했다", text))
+    tag_total = cnt_said + cnt_asked + cnt_answered
+    stats["대사태그 합계"] = tag_total
+    if tag_total > BJND_THRESHOLDS["대사태그"]:
+        issues.append(f"⚠️ 대사 태그(말했다/물었다/대답했다) {tag_total}회 — 행동 태그로 대체하세요.")
+        violations["대사태그"] = {
+            "count": tag_total,
+            "threshold": BJND_THRESHOLDS["대사태그"],
+            "severity": "medium",
+        }
+
+    # ── "마치 ~처럼" / "~듯했다" / "~같았다" 반복 (v3.0 신규) ──
+    cnt_macheoreom = len(re.findall(r"마치\s*.*?처럼", text))
+    cnt_deuthaetda = len(re.findall(r"듯했다|듯이", text))
+    cnt_gatatda = len(re.findall(r"같았다", text))
+    simile_total = cnt_macheoreom + cnt_deuthaetda + cnt_gatatda
+    stats["비유 패턴"] = simile_total
+    # 문단 단위는 정확 측정이 어려우니, Unit 전체에서 Unit당 약 1문단 1회 기준으로 임계
+    # 4개 문단당 1개 정도가 리미트 → 대략 Unit 분량 기준 6~8회까지 허용
+    if simile_total > 8:
+        issues.append(f"⚠️ '마치 ~처럼/듯했다/같았다' 합계 {simile_total}회 — 비유 과잉.")
+        violations["마치처럼"] = {
+            "count": simile_total,
+            "threshold": 8,
+            "severity": "medium",
+        }
+
+    # ── 장면 반복 ──
+    cnt_phone = len(re.findall(r"전화|휴대폰이|진동했다|문자|메시지가", text))
+    cnt_window = len(re.findall(r"창밖|창 밖|유리창|내려다보", text))
+    cnt_elevator = len(re.findall(r"엘리베이터|로비를|현관을", text))
+    stats["전화/메시지"] = cnt_phone
+    stats["창밖 묘사"] = cnt_window
+    if cnt_phone > 4:
+        issues.append(f"⚠️ 전화/메시지 장면 {cnt_phone}회 — 대면/발견/관찰로 대체하세요.")
+        violations["전화"] = {"count": cnt_phone, "threshold": 4, "severity": "medium"}
+    if cnt_window > 3:
+        issues.append(f"⚠️ '창밖' 묘사 {cnt_window}회 — 다른 방식으로 인물 내면을 쓰세요.")
+        violations["창밖"] = {"count": cnt_window, "threshold": 3, "severity": "low"}
+    if cnt_elevator > 2:
+        issues.append(f"⚠️ 엘리베이터/로비 {cnt_elevator}회 — 이동 묘사를 줄이세요.")
+        violations["엘리베이터"] = {"count": cnt_elevator, "threshold": 2, "severity": "low"}
+
+    # ── 시제 체크 (v3.0: 치명적) ──
+    present_patterns = re.findall(
+        r"(?:한다|된다|이다|간다|온다|본다|듣는다|만든다|열린다|닫힌다|울린다|채운다|넣는다|흐른다)\.",
+        text,
+    )
+    cnt_present = len(present_patterns)
+    stats["현재형 종결"] = cnt_present
+    if cnt_present > BJND_THRESHOLDS["현재형"]:
+        issues.append(f"🚨 현재형 종결어미 {cnt_present}회 감지 — 소설은 과거형(~했다)으로 써야 합니다!")
+        violations["현재형"] = {
+            "count": cnt_present,
+            "threshold": BJND_THRESHOLDS["현재형"],
+            "severity": "critical",
+        }
+
+    # ── 접속부사 과잉 ──
+    cnt_conj = len(re.findall(r"(?:그러나|하지만|그리고|또한|그래서|따라서)", text))
+    stats["접속부사"] = cnt_conj
+    if cnt_conj > 15:
+        issues.append(f"⚠️ 접속부사 {cnt_conj}회 — 접속부사 없이 문장을 병치하세요.")
+        violations["접속부사"] = {"count": cnt_conj, "threshold": 15, "severity": "low"}
+
+    # ── 같은 행동 반복 ──
+    action_patterns = [
+        (r"포크를 내려놓", "포크를 내려놓"),
+        (r"잔을 내려놓", "잔을 내려놓"),
+        (r"눈을 감", "눈을 감"),
+        (r"한숨을 쉬", "한숨을 쉬"),
+        (r"고개를 끄덕", "고개를 끄덕"),
+        (r"고개를 저", "고개를 저"),
+    ]
+    for pattern, label in action_patterns:
+        cnt = len(re.findall(pattern, text))
+        if cnt >= 3:
+            issues.append(f"⚠️ '{label}' {cnt}회 반복 — 같은 동작을 줄이세요.")
+
+    # ── 분량 ──
+    stats["총 글자수"] = len(text)
+
+    # v3.0 신규: 자동 재생성 트리거 판정
+    # severity가 "critical" 또는 "high"인 violation이 있으면 재생성 대상
+    should_regenerate = any(
+        v.get("severity") in ("critical", "high")
+        for v in violations.values()
+    )
+
+    return {
+        "issues": issues,
+        "stats": stats,
+        "violations": violations,
+        "should_regenerate": should_regenerate,
+    }
+
+
+def build_retry_hint(violations: dict) -> str:
+    """v3.0 M1: 자동 재생성 시 프롬프트에 주입할 위반 지표 힌트를 생성.
+
+    prompt.py의 build_unit_draft_prompt에 retry_hint 인자로 전달된다.
+    """
+    if not violations:
+        return ""
+
+    # severity 순서대로 정렬 (critical → high → medium → low)
+    severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+    sorted_violations = sorted(
+        violations.items(),
+        key=lambda kv: severity_order.get(kv[1].get("severity", "low"), 9)
+    )
+
+    lines = []
+    for key, info in sorted_violations:
+        count = info.get("count", 0)
+        threshold = info.get("threshold", 0)
+        severity = info.get("severity", "")
+
+        # 지표별 구체 지시문 생성
+        if key == "있었다":
+            target = max(threshold - 2, 5)  # 여유 -2
+            lines.append(
+                f"- '있었다' 사용: 이전 {count}회 (임계 {threshold}회 초과). "
+                f"이번엔 {target}회 이하로 작성. 구체 동사로 전환: '놓여 있었다'→'놓였다', '서 있었다'→'기대어 있었다' 등."
+            )
+        elif key == "것이었다":
+            lines.append(
+                f"- '것이었다' 해설체: 이전 {count}회 (임계 {threshold}회 초과). "
+                f"이번엔 1회 이하로. 서술 구조를 재설계하라."
+            )
+        elif key == "대사태그":
+            target = max(threshold - 2, 8)
+            lines.append(
+                f"- 대사 태그 합계(말했다/물었다/대답했다): 이전 {count}회 (임계 {threshold}회 초과). "
+                f"이번엔 {target}회 이하로. 대사 10개 중 6개 이상은 행동 태그로 대체."
+            )
+        elif key == "마치처럼":
+            lines.append(
+                f"- 비유 패턴(마치~처럼/듯했다/같았다): 이전 {count}회 (임계 {threshold}회 초과). "
+                f"이번엔 5회 이하로. 문단당 1회만 허용."
+            )
+        elif key == "현재형":
+            lines.append(
+                f"- 🚨 현재형 종결: 이전 {count}회 (임계 {threshold}회 초과, 치명적). "
+                f"이번엔 0회로. 모든 서술은 과거형(~했다, ~였다, ~었다)."
+            )
+        elif key == "전화":
+            lines.append(
+                f"- 전화/메시지 장면: 이전 {count}회 (임계 {threshold}회 초과). "
+                f"이번엔 2회 이하로. 대면·발견·관찰로 대체."
+            )
+        elif key == "창밖":
+            lines.append(
+                f"- '창밖' 묘사: 이전 {count}회 (임계 {threshold}회 초과). "
+                f"이번엔 1회 이하로. 걷기·운전·사물 다루기 등 다른 방식으로 내면 표현."
+            )
+        elif key == "엘리베이터":
+            lines.append(
+                f"- 엘리베이터/로비/현관 이동: 이전 {count}회 (임계 {threshold}회 초과). "
+                f"이번엔 1회 이하로. 장면 전환으로 처리."
+            )
+        elif key == "접속부사":
+            lines.append(
+                f"- 접속부사 과잉: 이전 {count}회. 이번엔 10회 이하로. 문장 병치로 관계를 암시."
+            )
+        else:
+            lines.append(f"- {key}: 이전 {count}회 (임계 {threshold}회 초과). 감소 필요.")
+
+    return "\n".join(lines)
+
+
+
+# ─────────────────────────────────────
+# Unit 요약 자동 생성
+# ─────────────────────────────────────
+def generate_unit_summary(unit_no: int, text: str) -> str:
+    """완성된 Unit의 1줄 요약을 생성한다."""
+    client = get_client()
+    if not client or not text or not text.strip():
+        return ""
+    try:
+        resp = client.messages.create(
+            model=os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-20250514"),
+            max_tokens=200,
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"다음은 소설의 UNIT {unit_no:02d} 원고이다. "
+                    "이 Unit의 핵심 사건, 인물 변화, 감정 상태를 1~2문장으로 요약하라. "
+                    "요약만 출력하고 다른 말은 하지 마라.\n\n"
+                    f"{text[:3000]}"
+                ),
+            }],
+        )
+        return resp.content[0].text.strip()
+    except Exception:
+        return ""
+
+
+def gather_all_summaries() -> str:
+    """모든 Unit 요약을 모아 반환한다."""
+    summaries = st.session_state.get("unit_summaries", {})
+    lines = []
+    for i in range(1, 14):
+        key = f"{i:02d}" if i < 13 else "13"
+        s = summaries.get(key, "")
+        if s:
+            lines.append(f"[UNIT {key} 요약] {s}")
+    return "\n".join(lines)
+
+
+# ─────────────────────────────────────
+# 캐릭터 등장 추적
+# ─────────────────────────────────────
+def extract_characters_from_text(text: str) -> str:
+    """Unit 원고에서 등장 인물 목록을 추출한다."""
+    client = get_client()
+    if not client or not text or not text.strip():
+        return ""
+    try:
+        resp = client.messages.create(
+            model=os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-20250514"),
+            max_tokens=300,
+            messages=[{
+                "role": "user",
+                "content": (
+                    "다음 소설 원고에서 등장하는 인물의 이름만 쉼표로 구분해서 나열하라. "
+                    "이름만 출력하고 다른 말은 하지 마라. 이름이 없으면 '없음'.\n\n"
+                    f"{text[:4000]}"
+                ),
+            }],
+        )
+        return resp.content[0].text.strip()
+    except Exception:
+        return ""
+
+
+def track_characters(unit_key: str, text: str):
+    """캐릭터 등장을 추적하고 세션에 저장한다."""
+    if "character_tracker" not in st.session_state:
+        st.session_state["character_tracker"] = {}
+    names_str = extract_characters_from_text(text)
+    if names_str and names_str != "없음":
+        names = [n.strip() for n in names_str.split(",") if n.strip()]
+        st.session_state["character_tracker"][unit_key] = names
+
+
+def get_character_report() -> dict:
+    """캐릭터 등장 추적 리포트를 생성한다."""
+    tracker = st.session_state.get("character_tracker", {})
+    if not tracker:
+        return {}
+    first_appearance = {}
+    all_chars = set()
+    for key in sorted(tracker.keys()):
+        for name in tracker[key]:
+            all_chars.add(name)
+            if name not in first_appearance:
+                first_appearance[name] = key
+    # 입력된 캐릭터 목록과 비교
+    input_chars = st.session_state.get("characters", "")
+    warnings = []
+    for name, unit in first_appearance.items():
+        if unit != "01" and name not in input_chars:
+            warnings.append(f"⚠️ '{name}' — UNIT {unit}에서 처음 등장. STEP 1 캐릭터 입력에 없는 인물.")
+    return {
+        "first_appearance": first_appearance,
+        "warnings": warnings,
+        "total": len(all_chars),
+    }
+
+
+def get_story_reinforcement_text() -> str:
+    sr = st.session_state["story_reinforcement"]
+    merged = []
+    for k in ["기", "승", "전", "결"]:
+        if sr.get(k):
+            merged.append(f"[{k} 보강]\n{sr[k]}")
+    merged_text = merge_nonempty(merged)
+    st.session_state["story_reinforcement_merged"] = merged_text
+    return merged_text
+
+
+def gather_blueprints_text() -> str:
+    bp = st.session_state["unit_blueprints"]
+    keys = ["01-02", "03-04", "05-06", "07-08", "09-10", "11-12"]
+    merged = []
+    for key in keys:
+        if bp.get(key):
+            merged.append(f"[UNIT {key} 설계]\n{bp[key]}")
+    return merge_nonempty(merged)
+
+
+def gather_all_drafts_text() -> str:
+    """전체 원고 — 내보내기용"""
+    drafts = st.session_state["unit_drafts"]
+    titles = st.session_state["chapter_titles"]
+    merged = []
+    for i in range(1, 14):
+        key = f"{i:02d}" if i < 13 else "13"
+        txt = drafts.get(key, "")
+        if txt.strip():
+            ch_title = titles.get(key, "")
+            if ch_title:
+                merged.append(f"{ch_title}\n{txt}")
+            else:
+                merged.append(txt)
+    return merge_nonempty(merged)
+
+
+def gather_recent_drafts(current_unit: int, window: int = 2) -> str:
+    """이전 Unit 요약 + 최근 N개 Unit 원고 — 연결성과 컨텍스트 동시 확보"""
+    drafts = st.session_state["unit_drafts"]
+    titles = st.session_state["chapter_titles"]
+    summaries = st.session_state.get("unit_summaries", {})
+    merged = []
+
+    # ── 1. 이전 전체 Unit의 1줄 요약 (컨텍스트 유지) ──
+    summary_lines = []
+    for i in range(1, current_unit):
+        key = f"{i:02d}" if i < 13 else "13"
+        s = summaries.get(key, "")
+        if s:
+            summary_lines.append(f"  UNIT {key}: {s}")
+    if summary_lines:
+        merged.append("[이전 Unit 요약 — 전체 흐름 파악용]\n" + "\n".join(summary_lines))
+
+    # ── 2. 최근 N개 Unit의 실제 텍스트 (연결성) ──
+    start = max(1, current_unit - window)
+    for i in range(start, current_unit):
+        key = f"{i:02d}" if i < 13 else "13"
+        txt = drafts.get(key, "")
+        if txt.strip():
+            ch_title = titles.get(key, "")
+            label = ch_title if ch_title else f"[UNIT {key}]"
+            if len(txt) > 3000:
+                txt = "(...전략...)\n" + txt[-3000:]
+            merged.append(f"{label}\n{txt}")
+    return merge_nonempty(merged)
+
+
+def export_txt(content: str) -> bytes:
+    return export_clean_content(content).encode("utf-8")
+
+
+def export_clean_content(content: str) -> str:
+    """최종 원고에서 내부 마커를 제거하고 소설 포맷으로 정리"""
+    import re
+    lines = content.split("\n")
+    cleaned = []
+    for line in lines:
+        s = line.strip()
+        # 내부 라벨 제거
+        if s.startswith("[UNIT ") and s.endswith("]"):
+            continue
+        # Stage A/B/C 내부 라벨 제거
+        if s.startswith("# Chapter") and ("Stage A" in s or "Stage B" in s or "Stage C" in s):
+            continue
+        if s.startswith("# Chapter") and "Unit" in s:
+            continue
+        if s.startswith("## ") or s.startswith("### "):
+            continue
+        # markdown # CHAPTER → [CHAPTER] 변환
+        m = re.match(r"^#\s*(CHAPTER\s*\d+)\s*[—\-]\s*(.+)$", s)
+        if m:
+            cleaned.append(f"[{m.group(1)}] — {m.group(2)}")
+            continue
+        # 기타 markdown # 헤더 → 일반 텍스트
+        if s.startswith("# "):
+            cleaned.append(s[2:])
+            continue
+        cleaned.append(line)
+
+    result = "\n".join(cleaned)
+
+    # ── 곧은 따옴표 → 둥근 따옴표 변환 ──
+    # 큰따옴표: " → " / "
+    result = re.sub(r'(?<=^)"', '\u201c', result, flags=re.MULTILINE)       # 줄 시작의 "
+    result = re.sub(r'(?<=\s)"', '\u201c', result)                          # 공백 뒤의 "
+    result = re.sub(r'"(?=\s)', '\u201d', result)                           # 공백 앞의 "
+    result = re.sub(r'"(?=[.,!?\n])', '\u201d', result)                     # 구두점 앞의 "
+    result = re.sub(r'"(?=$)', '\u201d', result, flags=re.MULTILINE)        # 줄 끝의 "
+    # 남은 곧은 큰따옴표 처리 (짝 맞추기)
+    remaining = []
+    is_open = True
+    for ch in result:
+        if ch == '"':
+            remaining.append('\u201c' if is_open else '\u201d')
+            is_open = not is_open
+        else:
+            remaining.append(ch)
+    result = "".join(remaining)
+
+    # 작은따옴표: ' → ' / '  (대화 안 인용 등)
+    result = result.replace("\u2018", "\u2018").replace("\u2019", "\u2019")  # 이미 둥근이면 유지
+    # 곧은 작은따옴표는 한국 소설에서 거의 안 쓰이므로 최소 처리
+    result = re.sub(r"(?<=\s)'", '\u2018', result)
+    result = re.sub(r"'(?=[\s.,!?])", '\u2019', result)
+
+    return result
+
+
+def export_docx(title: str, content: str) -> bytes:
+    """한국 소설 원고 표준 DOCX — MS Word 소설 원고 포맷"""
+    from docx.shared import Pt, Cm
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.oxml.ns import qn
+
+    content = export_clean_content(content)
+
+    doc = Document()
+
+    # ── 페이지: A4, 여백 (상 3cm, 하좌우 2.54cm) ──
+    section = doc.sections[0]
+    section.page_width = Cm(21)
+    section.page_height = Cm(29.7)
+    section.top_margin = Cm(3)
+    section.bottom_margin = Cm(2.54)
+    section.left_margin = Cm(2.54)
+    section.right_margin = Cm(2.54)
+
+    # ── 기본 스타일: 바탕 10pt, 줄간격 160%, 양쪽정렬, 첫 줄 들여쓰기 1글자 ──
+    style_normal = doc.styles["Normal"]
+    style_normal.font.name = "Batang"
+    style_normal.font.size = Pt(10)
+    style_normal.paragraph_format.line_spacing = 1.6
+    style_normal.paragraph_format.space_before = Pt(0)
+    style_normal.paragraph_format.space_after = Pt(0)
+    style_normal.paragraph_format.first_line_indent = Cm(0.35)
+    style_normal.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+
+    # 한글 폰트 (eastAsia)
+    rpr = style_normal.element.get_or_add_rPr()
+    rfonts = rpr.find(qn("w:rFonts"))
+    if rfonts is None:
+        from lxml import etree
+        rfonts = etree.SubElement(rpr, qn("w:rFonts"))
+    rfonts.set(qn("w:eastAsia"), "Batang")
+
+    # ── 헬퍼 ──
+    def add_normal(text):
+        return doc.add_paragraph(text)
+
+    def add_dialogue(text):
+        """대화문 — 들여쓰기 없음"""
+        p = doc.add_paragraph(text)
+        p.paragraph_format.first_line_indent = Cm(0)
+        return p
+
+    def add_centered(text, size=10, bold=False, before=0, after=0):
+        p = doc.add_paragraph(text)
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        p.paragraph_format.first_line_indent = Cm(0)
+        p.paragraph_format.space_before = Pt(before)
+        p.paragraph_format.space_after = Pt(after)
+        if p.runs:
+            p.runs[0].font.size = Pt(size)
+            p.runs[0].font.bold = bold
+
+    def add_scene_break():
+        """장면 전환 — 빈 줄 1개"""
+        p = doc.add_paragraph("")
+        p.paragraph_format.space_before = Pt(0)
+        p.paragraph_format.space_after = Pt(0)
+        p.paragraph_format.first_line_indent = Cm(0)
+
+    def add_page_break():
+        """페이지 나누기"""
+        from docx.oxml.ns import qn as _qn
+        p = doc.add_paragraph()
+        run = p.add_run()
+        br = run._element.makeelement(_qn('w:br'), {_qn('w:type'): 'page'})
+        run._element.append(br)
+        p.paragraph_format.space_before = Pt(0)
+        p.paragraph_format.space_after = Pt(0)
+
+    # ── 파싱 ──
+    lines = content.split("\n")
+    i = 0
+    is_first_line = True
+    chapter_count = 0
+
+    while i < len(lines):
+        s = lines[i].strip()
+
+        # 빈 줄 = 장면 전환
+        if not s:
+            add_scene_break()
+            i += 1
+            while i < len(lines) and not lines[i].strip():
+                i += 1
+            continue
+
+        # 작품 제목 (첫 줄)
+        if is_first_line and len(s) < 80:
+            add_centered(s, size=16, bold=True, before=72, after=24)
+            is_first_line = False
+            i += 1
+            continue
+        is_first_line = False
+
+        # 챕터 제목: [CHAPTER X] — ...
+        if s.startswith("[CHAPTER"):
+            if chapter_count > 0:
+                add_page_break()
+            add_centered(s, size=14, bold=True, before=36, after=18)
+            chapter_count += 1
+            i += 1
+            continue
+
+        # "끝."
+        if s == "끝.":
+            add_centered(s, size=11, bold=False, before=18, after=0)
+            i += 1
+            continue
+
+        # 대화문 — 따옴표로 시작하면 들여쓰기 없음
+        if s.startswith('"') or s.startswith('\u201c') or s.startswith('\u300c') or s.startswith("'"):
+            add_dialogue(s)
+            i += 1
+            continue
+
+        # 일반 본문 — 들여쓰기 적용 (기본 스타일)
+        add_normal(s)
+        i += 1
+
+    bio = BytesIO()
+    doc.save(bio)
+    bio.seek(0)
+    return bio.read()
+
+
+def final_manuscript_text(current_title: str) -> str:
+    parts = []
+    if current_title.strip():
+        parts.append(current_title.strip())
+
+    # 본문
+    drafts = gather_all_drafts_text().strip()
+    if drafts:
+        parts.append(drafts)
+    manuscript = "\n\n".join(parts).rstrip()
+    if manuscript and not manuscript.endswith("끝."):
+        manuscript += "\n\n끝."
+    return manuscript
+
+
+def safe_filename(name: str) -> str:
+    name = (name or "novel_draft").strip()
+    name = re.sub(r"[^0-9A-Za-z가-힣_-]+", "_", name)
+    return name or "novel_draft"
+
+
+def parse_chapter_title(text: str) -> tuple:
+    """원고 첫 줄에서 [CHAPTER X] — 서브타이틀을 추출한다.
+    Returns (chapter_title, body) — 제목이 없으면 ("", text)"""
+    if not text or not text.strip():
+        return ("", text)
+    lines = text.strip().split("\n", 1)
+    first_line = lines[0].strip()
+    if first_line.startswith("[CHAPTER"):
+        body = lines[1].strip() if len(lines) > 1 else ""
+        return (first_line, body)
+    return ("", text.strip())
+
+
+def set_status(message: str, status_type: str = "info") -> None:
+    st.session_state["status_message"] = message
+    st.session_state["status_type"] = status_type
+
+
+def render_status() -> None:
+    msg = st.session_state.get("status_message", "").strip()
+    status_type = st.session_state.get("status_type", "info")
+    if not msg:
+        return
+    if status_type == "success":
+        st.success(msg)
+    elif status_type == "error":
+        st.error(msg)
+    elif status_type == "warning":
+        st.warning(msg)
+    else:
+        st.info(msg)
+
+
+def run_with_status(start_message: str, done_message: str, fn):
+    set_status(start_message, "info")
+    with st.spinner(start_message):
+        try:
+            result = fn()
+            set_status(done_message, "success")
+            return result
+        except Exception as e:
+            set_status(f"작업 중 오류가 발생했습니다: {e}", "error")
+            return None
+
+
+def generate_or_expand_unit(unit_no: int, prompt: str) -> str:
+    result = llm_call(prompt, max_tokens=MAX_TOKENS_LONG, use_opus=True)
+    result = ensure_final_ending(result, unit_no)
+
+    if is_incomplete_text(result, unit_no):
+        expand_prompt = build_expand_incomplete_unit_prompt(
+            unit_no=unit_no,
+            current_text=result,
+            target_length=UNIT_TARGET_LENGTHS.get(unit_no, 8000),
+            min_length=UNIT_MIN_LENGTHS.get(unit_no, 6000),
+        )
+        extra = llm_call(expand_prompt, max_tokens=MAX_TOKENS_MID, use_opus=True)
+        result = (result.rstrip() + "\n\n" + extra.strip()).strip()
+        result = ensure_final_ending(result, unit_no)
+
+    return result
+
+
+# ─────────────────────────────────────
+# HEADER
+# ─────────────────────────────────────
+st.markdown(
+    f"""
+<div class="header-wrap">
+    <div class="header">BLUE JEANS PICTURES</div>
+    <div class="brand-title">{APP_TITLE}</div>
+    <div class="sub">YOUNG · VINTAGE · FREE · INNOVATIVE</div>
+</div>
+""",
+    unsafe_allow_html=True,
+)
+
+st.markdown(
+    """
+<div class="callout">
+기획 자료를 넣으면 엔진이 분석 → 부족한 점 진단 → 기승전결 보강 → 12 Unit 설계 → Unit 원고 생성 →
+가제 검토/제목 제안까지 순서대로 진행합니다.
+</div>
+""",
+    unsafe_allow_html=True,
+)
+
+render_status()
+
+# ─────────────────────────────────────
+# v3.1 SIDEBAR: 버전 및 활성 모듈 표시
+# ─────────────────────────────────────
+with st.sidebar:
+    st.markdown(f"### 👖 Novel Engine {NOVEL_ENGINE_VERSION}")
+    st.caption(f"Build {NOVEL_ENGINE_BUILD_DATE}")
+
+    # v3.1 시나리오 모드 상태
+    if st.session_state.get("scenario_fields_applied"):
+        st.success("📄 시나리오 소설화 모드 활성")
+        stats = st.session_state.get("scenario_stats", {})
+        st.caption(f"원작: {stats.get('char_count', 0):,}자 · {stats.get('scene_count', 0)}씬")
+
+    st.markdown("---")
+    st.markdown("**v3.1 신규**")
+    st.markdown(
+        f"""
+- 📄 시나리오 업로드 모드
+- 🧬 Sonnet 자동 추출 (STEP 1)
+- 🗺️ 12 Unit 매핑 가이드 (STEP 4)
+- 추출기: {'✅' if _SCENARIO_EXTRACTOR_AVAILABLE else '❌'}
+"""
+    )
+    st.markdown("---")
+    st.markdown("**v3.0 모듈**")
+    st.markdown(
+        f"""
+- M1 BJND Scene Enforcer
+- M2 OPENING MASTERY
+- M3 BJND 4축 자기검증
+- M4 Sub-genre OVERRIDE 4종
+- M5 Profession Pack: {'✅' if _PROFESSION_PACK_AVAILABLE else '❌'}
+- M6 Chapter Signature
+- M7 Reader Retention Curve
+- M8 POV Discipline
+- M9 Period Pack: {'✅' if _PERIOD_PACK_AVAILABLE else '❌'}
+- M10 Profession × Period 교차검증
+"""
+    )
+    st.markdown("---")
+    st.markdown("**BJND 임계치**")
+    st.markdown(
+        f"""
+- 있었다 ≤ {BJND_THRESHOLDS['있었다']}회/Unit
+- 것이었다 ≤ {BJND_THRESHOLDS['것이었다']}회/Unit
+- 대사태그 ≤ {BJND_THRESHOLDS['대사태그']}회/Unit
+- 현재형 ≤ {BJND_THRESHOLDS['현재형']}회/Unit (치명적)
+"""
+    )
+    st.caption("임계치 초과 시 자동 재생성 1회")
+
+# ─────────────────────────────────────
+# v3.1 STEP 0 · 시나리오 업로드 (선택)
+# ─────────────────────────────────────
+st.markdown('<div class="section-header">📄 STEP 0 · 시나리오 업로드 (선택 — 시나리오 소설화 모드)</div>', unsafe_allow_html=True)
+
+st.markdown(
+    """
+<div class="callout">
+기존 시나리오(DOCX/TXT)를 업로드하면 Sonnet이 자동으로 STEP 1 입력 자료와 STEP 4 12 Unit 매핑 가이드를 생성합니다.
+추출 결과는 수정 가능한 형태로 STEP 1 필드에 자동 입력됩니다. 시나리오가 없으면 이 단계를 건너뛰고 STEP 1부터 수동 입력하세요.
+</div>
+""",
+    unsafe_allow_html=True,
+)
+
+scenario_col1, scenario_col2 = st.columns([1, 1])
+
+with scenario_col1:
+    scenario_file = st.file_uploader(
+        "시나리오 파일 업로드 (.docx / .txt)",
+        type=["docx", "txt"],
+        key="scenario_upload",
+        help="시나리오 원문 파일. Sonnet이 읽고 전체 구조를 추출합니다.",
+    )
+
+with scenario_col2:
+    scenario_pasted = st.text_area(
+        "또는 시나리오 붙여넣기",
+        height=120,
+        placeholder="파일 업로드 대신 시나리오를 직접 붙여넣을 수 있습니다.",
+        key="scenario_paste",
+    )
+
+# 파일이 업로드되면 즉시 텍스트 추출
+if scenario_file is not None:
+    try:
+        file_bytes = scenario_file.read()
+        if scenario_file.name.lower().endswith(".docx"):
+            extracted_text = extract_text_from_docx(file_bytes)
+        else:
+            extracted_text = extract_text_from_txt(file_bytes)
+        if extracted_text.strip():
+            st.session_state["scenario_text"] = extracted_text
+            st.session_state["scenario_stats"] = analyze_scenario_structure(extracted_text)
+        else:
+            st.error("파일에서 텍스트를 추출하지 못했습니다. TXT 인코딩을 확인하거나 붙여넣기를 사용해 주세요.")
+    except Exception as e:
+        st.error(f"파일 처리 오류: {e}")
+elif scenario_pasted and scenario_pasted.strip():
+    st.session_state["scenario_text"] = scenario_pasted.strip()
+    st.session_state["scenario_stats"] = analyze_scenario_structure(scenario_pasted.strip())
+
+# 업로드된 시나리오가 있으면 통계와 추출 버튼 표시
+if st.session_state.get("scenario_text", "").strip():
+    stats = st.session_state.get("scenario_stats", {})
+    st.markdown("**📊 시나리오 구조 통계**")
+    stat_cols = st.columns(6)
+    stat_cols[0].metric("글자 수", f"{stats.get('char_count', 0):,}")
+    stat_cols[1].metric("문단 수", f"{stats.get('paragraph_count', 0):,}")
+    stat_cols[2].metric("추정 씬 수", stats.get("scene_count", 0))
+    stat_cols[3].metric("V.O 지시", stats.get("vo_count", 0))
+    stat_cols[4].metric("CUT 지시", stats.get("cut_count", 0))
+    stat_cols[5].metric("회상 씬", stats.get("flashback_count", 0))
+
+    extract_col1, extract_col2 = st.columns([2, 1])
+    with extract_col1:
+        if st.button(
+            "🧬 Sonnet 자동 추출 실행 — STEP 1 필드 + STEP 4 매핑 생성",
+            type="primary",
+            use_container_width=True,
+            disabled=not _SCENARIO_EXTRACTOR_AVAILABLE,
+        ):
+            client = get_client()
+            if client is None:
+                st.error("ANTHROPIC_API_KEY가 설정되지 않았습니다.")
+            else:
+                with st.spinner("시나리오를 분석하고 있습니다... (30~60초 소요)"):
+                    result = extract_scenario_fields(
+                        scenario_text=st.session_state["scenario_text"],
+                        anthropic_client=client,
+                        model=DEFAULT_MODEL,
+                        max_tokens=MAX_TOKENS_LONG,
+                    )
+                if "_error" in result:
+                    st.error(f"추출 실패: {result['_error']}")
+                    if "_raw_response" in result:
+                        with st.expander("응답 원문 보기"):
+                            st.text(result["_raw_response"])
+                else:
+                    st.session_state["scenario_extracted"] = result
+                    mapping_text = build_unit_mapping_text(result.get("unit_mapping", []))
+                    st.session_state["scenario_mapping_text"] = mapping_text
+                    st.session_state["scenario_fields_applied"] = True
+                    st.success(
+                        "✅ 추출 완료. STEP 1 필드가 자동 입력되었고, STEP 4 Unit 설계 시 매핑 가이드가 자동 주입됩니다. "
+                        "필요하면 STEP 1에서 수정하세요."
+                    )
+                    st.rerun()
+
+    with extract_col2:
+        if st.session_state.get("scenario_fields_applied"):
+            if st.button("🔄 추출 결과 초기화", use_container_width=True):
+                st.session_state["scenario_extracted"] = {}
+                st.session_state["scenario_mapping_text"] = ""
+                st.session_state["scenario_fields_applied"] = False
+                st.rerun()
+
+    # 추출 결과 미리보기
+    extracted = st.session_state.get("scenario_extracted", {})
+    if extracted and "_error" not in extracted:
+        with st.expander("🔍 추출 결과 미리보기", expanded=False):
+            st.markdown(f"**로그라인:** {extracted.get('logline', '')}")
+            st.markdown(f"**장르:** {extracted.get('genre', '')}")
+            st.markdown(f"**주인공 직업:** {extracted.get('profession_protagonist', '')}")
+            st.markdown(f"**적대자/조연 직업:** {extracted.get('profession_antagonist', '')}")
+            st.markdown(f"**시대 키:** {extracted.get('period_keys', [])}")
+            st.markdown("**작품 개요:**")
+            st.text(extracted.get("overview", ""))
+            st.markdown("**캐릭터:**")
+            st.text(extracted.get("characters", "")[:1000] + ("..." if len(extracted.get("characters", "")) > 1000 else ""))
+            st.markdown("**12 Unit 매핑 가이드:**")
+            mapping = extracted.get("unit_mapping", [])
+            for item in mapping:
+                st.markdown(f"- **Unit {item.get('unit_no', '?')}**: {item.get('function', '')}")
+
+# v3.1: STEP 1 필드 기본값 결정 (추출 결과 있으면 그걸 사용)
+_ex = st.session_state.get("scenario_extracted", {}) if st.session_state.get("scenario_fields_applied") else {}
+
+# ─────────────────────────────────────
+# STEP 1
+# ─────────────────────────────────────
+st.markdown('<div class="section-header">🔥 STEP 1 · 작품 자료 입력</div>', unsafe_allow_html=True)
+
+if st.session_state.get("scenario_fields_applied"):
+    st.info("📄 시나리오 추출 결과가 자동 입력되었습니다. 필요하면 아래 필드를 수정하세요.")
+
+col1, col2 = st.columns([1, 1])
+
+with col1:
+    working_title = st.text_input(
+        "현재 가제",
+        value=_ex.get("logline", "")[:30] if _ex else "",
+        placeholder="예: 감각구역 / 머지 앤 어퀴지션 / 검은 항구",
+    )
+    genre = st.text_input(
+        "장르",
+        value=_ex.get("genre", "") if _ex else "",
+        placeholder="예: 스릴러, 역사드라마, 금융 스릴러, 첩보물",
+    )
+    format_mode = st.selectbox("형식", ["장편소설", "웹소설", "하이브리드"], index=0)
+
+with col2:
+    pov = st.selectbox("시점", ["3인칭 제한", "1인칭", "듀얼 POV", "다중시점"], index=0)
+    target_length = st.text_input("목표 분량", placeholder="예: 12만자 / 12 Units / Unit당 1만자")
+    style_strength = st.selectbox("문체 반영 강도", ["약", "중", "강"], index=1)
+
+overview = st.text_area(
+    "작품 개요",
+    height=220,
+    value=_ex.get("overview", "") if _ex else "",
+    placeholder="로그라인, 기획의도, 세계관, 장르 톤, 작품의 핵심 질문, 차별점",
+)
+
+characters = st.text_area(
+    "캐릭터",
+    height=220,
+    value=_ex.get("characters", "") if _ex else "",
+    placeholder="주인공 / 적대자 / 조력자 / 핵심 관계, 각 인물의 욕망 / 결핍 / 비밀 / 변화",
+)
+
+synopsis = st.text_area(
+    "줄거리 / 트리트먼트",
+    height=260,
+    value=_ex.get("synopsis", "") if _ex else "",
+    placeholder="시작, 중반, 위기, 클라이맥스, 엔딩 방향, 반드시 살릴 사건",
+)
+
+notes = st.text_area(
+    "추가 메모 (선택)",
+    height=180,
+    value=_ex.get("notes", "") if _ex else "",
+    placeholder="약한 부분, 반드시 살릴 장면, 정보 레이어, 역사 고증 메모, 참고 톤",
+)
+
+style_sample = st.text_area(
+    "문체 샘플 (선택)",
+    height=220,
+    placeholder="Mr.MOON이 직접 쓴 소설/산문/블로그 문장 일부",
+)
+
+# ─────────────────────────────────────
+# v3.0 신규: 직업(M5) + 시대(M9) 입력 섹션
+# ─────────────────────────────────────
+st.markdown(
+    '<div style="margin-top:16px; font-weight:600; color:#191970;">🎯 v3.0 · 전문성 강화 (직업 / 시대)</div>',
+    unsafe_allow_html=True,
+)
+st.caption(
+    "입력하신 정보로 Creator Engine의 Profession Pack(19 카테고리) 및 Period Pack(10 시대)이 자동 주입됩니다. "
+    "비워두면 주입하지 않습니다."
+)
+
+prof_col1, prof_col2 = st.columns([1, 1])
+
+with prof_col1:
+    profession_protagonist = st.text_input(
+        "주인공 직업 (M5)",
+        value=_ex.get("profession_protagonist", "") if _ex else "",
+        placeholder="예: M&A 변호사 / 강력계 형사 / 오너 셰프 / 투자은행 VP / 군의관",
+        help="Profession Pack이 자동 감지하여 전문 용어·공간·일상·스트레스를 주입합니다.",
+    )
+
+with prof_col2:
+    profession_antagonist = st.text_input(
+        "주요 조연/적대자 직업 (M5, 선택)",
+        value=_ex.get("profession_antagonist", "") if _ex else "",
+        placeholder="예: 검사 / 조직폭력 보스 / 기자 / 로비스트",
+        help="주인공과 다른 직업이면 추가 주입. 같으면 중복 방지.",
+    )
+
+# v3.0 M9: 시대 설정
+period_col1, period_col2 = st.columns([1, 2])
+
+with period_col1:
+    period_mode = st.radio(
+        "시대 모드 (M9)",
+        ["현대 (시대 주입 없음)", "자동 감지 (LOCKED에서)", "수동 선택"],
+        index=0,
+        help="역사소설이 아니면 '현대'를 유지하세요. 자동 감지는 LOCKED 블록의 연도·인물·사건 키워드를 스캔합니다.",
+    )
+
+with period_col2:
+    period_keys_selected = []
+    if period_mode == "수동 선택" and PERIOD_KEYS:
+        # 한국어 라벨로 표시하되 내부 키로 저장
+        period_options = [f"{k} · {get_period_label(k)}" for k in PERIOD_KEYS]
+        # v3.1: 추출된 시대 키를 기본값으로
+        default_labels = []
+        if _ex and _ex.get("period_keys"):
+            for k in _ex["period_keys"][:2]:
+                if k in PERIOD_KEYS:
+                    default_labels.append(f"{k} · {get_period_label(k)}")
+        selected_labels = st.multiselect(
+            "시대 선택 (최대 2개, 다중 시대 교차 전개 시 2개)",
+            period_options,
+            default=default_labels,
+            max_selections=2,
+            help="일제강점기 + 현대, 구한말 + 일제강점기 등 교차 전개도 가능.",
+        )
+        # label에서 키만 추출
+        period_keys_selected = [s.split(" · ")[0] for s in selected_labels]
+    elif period_mode == "자동 감지 (LOCKED에서)":
+        st.caption("ℹ️ LOCKED 블록 입력 후 Unit 생성 시 자동 감지됩니다.")
+
+lock_col1, lock_col2 = st.columns([1, 1])
+
+with lock_col1:
+    locked_text = st.text_area(
+        "🔒 LOCKED 설정 (절대 변경 불가)",
+        height=180,
+        value=_ex.get("locked_text", "") if _ex else "",
+        placeholder="변경 금지 항목을 줄 단위로 입력\n예:\n- 한유진: QLCP 대표. 직책 변경 금지.\n- 마이클 모건: 적대자. 동맹으로 변경 금지.\n- 기획의도: 글로벌 금융 권력 비판이 테마에 반영되어야 함.",
+    )
+
+with lock_col2:
+    open_text = st.text_area(
+        "🔓 OPEN 설정 (창작 가능 범위)",
+        height=180,
+        value=_ex.get("open_text", "") if _ex else "",
+        placeholder="자유롭게 창작 가능한 항목\n예:\n- 캐릭터 외형, 습관, 말투 디테일은 자유롭게 확장 가능.\n- 장면별 감정 변화와 감각 묘사는 자유롭게 창작 가능.",
+    )
+
+locked_block = build_locked_block(locked_text, open_text)
+
+# v3.0: 직업/시대 정보를 하나의 문자열과 키 리스트로 정리
+profession_text_combined = " / ".join(
+    p.strip() for p in [profession_protagonist, profession_antagonist] if p and p.strip()
+)
+
+# 시대 키 확정
+if period_mode == "수동 선택":
+    active_period_keys = period_keys_selected
+elif period_mode == "자동 감지 (LOCKED에서)":
+    # 자동 감지는 각 생성 함수 내부에서 locked_block 기반으로 수행
+    active_period_keys = None
+else:
+    active_period_keys = []  # 빈 리스트 = 주입 안 함
+
+# 감지 미리보기 (자동 감지 모드일 때만)
+if period_mode == "자동 감지 (LOCKED에서)" and locked_text.strip() and _PERIOD_PACK_AVAILABLE:
+    try:
+        preview = detect_period_from_locked(locked_text)
+        if preview:
+            preview_labels = [get_period_label(k) for k in preview[:2]]
+            st.info(f"🕰️ 감지된 시대: {' · '.join(preview_labels)}")
+        else:
+            st.caption("ℹ️ LOCKED에서 시대 키워드를 감지하지 못했습니다. 현대로 처리됩니다.")
+    except Exception:
+        pass
+
+# ─────────────────────────────────────
+# STEP 2
+# ─────────────────────────────────────
+st.markdown('<div class="section-header">🔬 STEP 2 · 문체 / 분석</div>', unsafe_allow_html=True)
+
+c1, c2, c3 = st.columns(3)
+
+with c1:
+    if st.button("문체 샘플 분석", type="primary", use_container_width=True):
+        def _job():
+            prompt = STYLE_DNA_ANALYSIS_PROMPT.format(style_sample=style_sample or "샘플 없음")
+            return llm_call(prompt, max_tokens=MAX_TOKENS_SHORT)
+        result = run_with_status("문체 샘플을 분석 중입니다...", "문체 샘플 분석이 완료되었습니다.", _job)
+        if result is not None:
+            st.session_state["style_dna"] = result
+
+with c2:
+    if st.button("기획서 통합 분석", use_container_width=True):
+        def _job():
+            prompt = build_merge_analysis_prompt(
+                working_title=working_title,
+                genre=genre,
+                format_mode=format_mode,
+                pov=pov,
+                target_length=target_length,
+                overview=overview,
+                characters=characters,
+                synopsis=synopsis,
+                notes=notes,
+                style_dna=st.session_state["style_dna"],
+                style_strength=style_strength,
+                locked_block=locked_block,
+            )
+            return llm_call(prompt, max_tokens=MAX_TOKENS_MID)
+        result = run_with_status("기획서 통합 분석 중입니다...", "기획서 통합 분석이 완료되었습니다.", _job)
+        if result is not None:
+            st.session_state["merged_analysis"] = result
+
+with c3:
+    if st.button("부족한 점 진단", use_container_width=True):
+        def _job():
+            prompt = build_gap_diagnosis_prompt(
+                working_title=working_title,
+                merged_analysis=st.session_state["merged_analysis"],
+                overview=overview,
+                characters=characters,
+                synopsis=synopsis,
+                notes=notes,
+                style_dna=st.session_state["style_dna"],
+                locked_block=locked_block,
+            )
+            return llm_call(prompt, max_tokens=MAX_TOKENS_MID)
+        result = run_with_status("부족한 점을 진단 중입니다...", "부족한 점 진단이 완료되었습니다.", _job)
+        if result is not None:
+            st.session_state["gap_diagnosis"] = result
+
+if st.session_state["style_dna"]:
+    with st.expander("STYLE DNA 보기", expanded=False):
+        st.markdown(st.session_state["style_dna"])
+
+if st.session_state["merged_analysis"]:
+    with st.expander("기획서 통합 분석 보기", expanded=False):
+        st.markdown(st.session_state["merged_analysis"])
+
+if st.session_state["gap_diagnosis"]:
+    with st.expander("부족한 점 진단 보기", expanded=False):
+        st.markdown(st.session_state["gap_diagnosis"])
+
+# ─────────────────────────────────────
+# STEP 3
+# ─────────────────────────────────────
+st.markdown('<div class="section-header">📖 STEP 3 · 전체 줄거리 보강 (기승전결 분할)</div>', unsafe_allow_html=True)
+
+sr_col1, sr_col2, sr_col3, sr_col4 = st.columns(4)
+
+def reinforce_segment(segment_name: str):
+    def _job():
+        prompt = build_story_reinforcement_prompt(
+            segment_name=segment_name,
+            working_title=working_title,
+            genre=genre,
+            overview=overview,
+            characters=characters,
+            synopsis=synopsis,
+            notes=notes,
+            merged_analysis=st.session_state["merged_analysis"],
+            gap_diagnosis=st.session_state["gap_diagnosis"],
+            style_dna=st.session_state["style_dna"],
+            locked_block=locked_block,
+        )
+        return llm_call(prompt, max_tokens=MAX_TOKENS_MID)
+
+    result = run_with_status(
+        f"{segment_name} 구간을 장편소설 구조로 보강 중입니다...",
+        f"{segment_name} 구간 보강이 완료되었습니다.",
+        _job,
+    )
+    if result is not None:
+        st.session_state["story_reinforcement"][segment_name] = result
+        get_story_reinforcement_text()
+
+with sr_col1:
+    if st.button("기 보강", use_container_width=True):
+        reinforce_segment("기")
+with sr_col2:
+    if st.button("승 보강", use_container_width=True):
+        reinforce_segment("승")
+with sr_col3:
+    if st.button("전 보강", use_container_width=True):
+        reinforce_segment("전")
+with sr_col4:
+    if st.button("결 보강", use_container_width=True):
+        reinforce_segment("결")
+
+story_merged_text = get_story_reinforcement_text()
+
+for seg in ["기", "승", "전", "결"]:
+    seg_text = st.session_state["story_reinforcement"].get(seg, "")
+    if seg_text:
+        with st.expander(f"{seg} 보강 보기", expanded=False):
+            st.markdown(seg_text)
+
+# ─────────────────────────────────────
+# STEP 4
+# ─────────────────────────────────────
+st.markdown('<div class="section-header">🏗️ STEP 4 · 12 Unit 설계 (2 Unit씩 6개 버튼)</div>', unsafe_allow_html=True)
+
+bp_cols_top = st.columns(3)
+bp_cols_bottom = st.columns(3)
+
+def build_blueprint(group_key: str):
+    def _job():
+        prompt = build_unit_blueprint_prompt(
+            group_key=group_key,
+            working_title=working_title,
+            genre=genre,
+            format_mode=format_mode,
+            pov=pov,
+            overview=overview,
+            characters=characters,
+            story_reinforcement_merged=story_merged_text,
+            synopsis=synopsis,
+            notes=notes,
+            style_dna=st.session_state["style_dna"],
+            locked_block=locked_block,
+            # v3.0 신규
+            profession_text=profession_text_combined,
+            period_keys=active_period_keys,
+            # v3.1 신규: 시나리오 소설화 매핑 가이드
+            scenario_mapping=st.session_state.get("scenario_mapping_text", ""),
+        )
+        return llm_call(prompt, max_tokens=MAX_TOKENS_MID)
+
+    result = run_with_status(
+        f"UNIT {group_key} 설계를 생성 중입니다...",
+        f"UNIT {group_key} 설계가 완료되었습니다.",
+        _job,
+    )
+    if result is not None:
+        st.session_state["unit_blueprints"][group_key] = result
+
+buttons = [
+    ("UNIT 01~02 설계", "01-02"),
+    ("UNIT 03~04 설계", "03-04"),
+    ("UNIT 05~06 설계", "05-06"),
+    ("UNIT 07~08 설계", "07-08"),
+    ("UNIT 09~10 설계", "09-10"),
+    ("UNIT 11~12 설계", "11-12"),
 ]
 
-def detect_genre_key(genre_str):
-    gl = genre_str.lower()
-    for kws, gk in GENRE_KEYWORD_MAP:
-        if any(k in gl for k in kws):
-            return gk
-    return "미지정"
-
-def get_genre_rules_block(genre_key):
-    r = GENRE_RULES.get(genre_key, GENRE_RULES["미지정"])
-    ml = "\n".join([f"  - {m}" for m in r["must_have"]])
-    fl = "\n".join([f"  - {f}" for f in r["fails"]])
-    return f"""[장르 Rule Pack: {genre_key}]
-핵심 원칙: {r['core']}
-장르적 재미의 본질: {r['genre_fun']}
-오프닝 패턴: {r['opening']}
-필수 요소:
-{ml}
-Hook 규칙: {r['hook_rule']}
-Punch 규칙: {r['punch_rule']}
-금지 사항: {r['forbidden']}
-장르 실패 패턴:
-{fl}
-"""
-
-# =================================================================
-# [3] SORKIN/CURTIS 9원칙 (소설 적용 버전)
-# =================================================================
-SORKIN_CURTIS_BLOCK = """
-[Sorkin/Curtis 9원칙 — 소설 적용]
-
-1. BUT/EXCEPT 테스트: 이 작품의 핵심 갈등에 역전(reversal)이 있는가? 'A가 B를 원한다, 그런데 C 때문에 불가능하다' 구조가 분명한가?
-
-2. Intention & Obstacle 압박: 주인공의 목표(Goal)에 대해 — 판돈이 충분히 높은가? 왜 지금 행동해야 하는가(긴급성)? 이 인물이 이 목표를 추구하는 것이 납득되는가?
-
-3. Tactics = Character: 인물의 성격은 말로 정의되지 않는다. 장애물을 넘기 위해 선택하는 전술이 인물을 정의한다. 같은 문이 잠겨 있을 때 A는 부순다, B는 열쇠를 훔친다, C는 다른 문을 찾는다.
-
-4. Probable Impossibility: 억지 우연 금지. 모든 사건은 인물의 선택과 행동에서 비롯되어야 한다. 우연은 문제를 만들 수 있으나 해결해서는 안 된다.
-
-5. Drop in the Middle: 첫 장면부터 이야기 한가운데에 독자를 던져라. 배경 설명부터 시작하지 마라.
-
-6. Unified Plot Test: 어떤 장면을 빼도 이야기가 작동한다면, 그 장면은 필요 없다.
-
-7. Too Wet 금지: 인물이 감정을 직접 말하지 않는다. '나 슬퍼', '나 화났어' 같은 대사/서술 금지. 행동, 침묵, 선택으로 보여줘라.
-
-8. Curtis 3% 법칙: 톤에서 3%만 빗나가면 정반대 작품이 된다. 유머와 긴장, 감정과 냉소의 균형을 정밀하게 유지하라.
-
-9. Curtis 감정 연쇄: A장면의 마지막 감정이 B장면의 첫 전제가 된다. 감정의 인과를 끊지 마라.
-
-[BJND 서사동력 — Goal vs Need]
-★ 이 작품의 주인공에게 Goal(외적 욕망)과 Need(내적 필요)가 있는가? 둘의 간극이 이야기를 끌고 간다. ★
-
-- Goal = 주인공이 의식적으로 추구하는 것. 돈, 지위, 복수, 생존.
-- Need = 주인공이 무의식적으로 필요한 것. 용서, 연결, 자기 수용, 진실.
-- 1막~2막 전반: Goal을 향해 전진하지만, Need와는 멀어진다. 이 간극이 긴장을 만든다.
-- 미드포인트(Unit 6 부근): Goal 추구가 좌절되면서 Need를 인식하기 시작한다.
-- 클라이맥스(Unit 11~12): Goal을 포기하고 Need를 선택하거나, Goal과 Need가 합치된다.
-
-서사동력 유형:
-- 상실(Loss) 기반: 되찾으려는 시도 → 되찾을 수 없음 → 수용 또는 파멸
-- 결핍(Lack) 기반: 쟁취하려는 시도 → 대가 인식 → 진짜 필요한 것 발견
-""".strip()
-
-# =================================================================
-# [4] 독자 심리 6원칙
-# =================================================================
-READER_PSYCHOLOGY_BLOCK = """
-[독자 심리 6원칙 — 페이지 터너 설계]
-
-1. Dramatic Irony (극적 아이러니): 독자에게 인물보다 먼저 정보를 줘라. 독자가 '저 사람은 모르는데...'라고 생각하는 순간 긴장이 극대화된다.
-
-2. Information Gap (정보 간극): 독자가 '왜?', '어떻게?', '그 다음은?'이라고 질문하게 만들어라. 열린 질문이 없으면 독자는 책을 내려놓는다.
-
-3. Zeigarnik Effect (미완성 효과): 완결되지 않은 일이 완결된 일보다 기억에 남는다. 장면을 깔끔하게 끝내지 말고 무언가를 남겨라.
-
-4. Pattern & Violation (패턴과 위반): 패턴을 만들고 독자가 예측하게 한 뒤, 결정적 순간에 패턴을 깨뜨려라.
-
-5. Delayed Gratification (지연된 보상): 독자가 원하는 장면을 바로 주지 마라. 기다림이 길수록 보상의 쾌감이 크다.
-
-6. Mystery Box (미스터리 상자): 열리지 않은 상자가 열린 상자보다 강하다. 모든 것을 설명하지 마라. 안 보여주는 것이 보여주는 것보다 강하다.
-""".strip()
-
-# =================================================================
-# [4-C] 상업소설 5대 기계 — COMMERCIAL NOVEL MECHANICS
-# =================================================================
-
-# ── ① Twist Map (반전 배치 설계) ──
-TWIST_MAP_BLOCK = """
-[TWIST MAP — 반전 배치 설계]
-
-상업소설은 2~3 Unit마다 반드시 반전이 있어야 한다. 반전이 없는 구간이 3 Unit 이상 이어지면 독자는 책을 내려놓는다.
-
-[반전의 5단계]
-L1. 정보 반전: 독자가 알던 사실이 거짓이었다 (단서 뒤집힘)
-L2. 관계 반전: 동맹이 적이 되거나, 적이 동맹이 된다
-L3. 목표 반전: 주인공이 추구하던 것 자체가 함정이었다
-L4. 정체 반전: 인물의 정체, 과거, 소속이 뒤집힌다
-L5. 세계 반전: 세계의 규칙, 조직의 본질이 뒤집힌다
-
-[배치 규칙]
-- Unit 1~2: L1 정보 반전 최소 1개 (독자를 잡는 미끼)
-- Unit 3~4: L2 관계 반전 (믿었던 인물의 이면)
-- Unit 5~6: L3 목표 반전 또는 L4 정체 반전 (미드포인트 빅 트위스트)
-- Unit 7~8: L2 + L4 중첩 (배신 + 정체 동시)
-- Unit 9~10: L5 세계 반전 (모든 것이 뒤집히는 순간)
-- Unit 11~12: 최종 반전 — 이전 반전들이 하나로 수렴
-
-[반전 품질 규칙]
-- Fair Play: 반전의 단서가 이전 Unit에 반드시 심어져 있어야 한다. 갑자기 등장하는 반전은 금지.
-- 반전 후 세계가 달라져야 한다: 반전 전과 후의 상황이 동일하면 가짜 반전이다.
-- 반전은 플롯만 바꾸는 것이 아니라 인물의 감정 상태도 바꿔야 한다.
-""".strip()
-
-# ── ② 상업소설 페이싱 규칙 ──
-PACING_RULES_BLOCK = """
-[PACING — 상업소설 속도 규칙]
-
-시드니 셸던의 페이싱: 짧은 챕터, 짧은 장면, 긴 묘사 블록 없음. 독자가 "한 챕터만 더"를 반복하게 만드는 속도.
-
-[장면 길이 규칙]
-- 대화 장면: 800~1500자. 짧고 날카롭게.
-- 액션/긴장 장면: 1000~2000자. 짧은 문장, 빠른 호흡.
-- 감정/관계 장면: 1500~2500자. 가장 길 수 있지만, 한 감정에 집중.
-- 설명/설정 장면: 단독으로 존재하면 안 된다. 반드시 대화나 행동 안에 녹여라.
-
-[속도 변화 규칙]
-- 3개 이상의 빠른 장면 연속 후 반드시 1개의 느린 장면 (호흡 조절)
-- 느린 장면이 2개 연속되면 안 된다 (리듬 붕괴)
-- Unit 전반부는 셋업(느림), 후반부는 가속(빠름)이 기본이되, 매번 같은 패턴 금지
-
-[문단 밀도 규칙]
-- ★ 하나의 문단은 최소 5문장 이상. 2~3문장짜리 짧은 문단을 반복하지 마라. ★
-- 줄바꿈(빈 줄)은 장면 전환 시에만. 같은 장면 안에서는 하나의 긴 흐름으로 연결한다.
-- 대사와 대사 사이의 행동 묘사도 줄바꿈 없이 이어서 쓴다.
-- Unit 하나(7,000~9,000자)에서 빈 줄은 최대 5~8개. 그 이상이면 단락이 너무 잘게 쪼개진 것이다.
-
-[금지]
-- 1000자 이상의 연속 서술 블록 (대사, 행동, 장면 전환 없이)
-- 설정 설명이 3문장 이상 연속되는 구간
-- 같은 장소에서 같은 인물이 5분 이상의 스크린타임을 설명 없이 보내는 것
-""".strip()
-
-# ── ③ 클리프행어 강제 규칙 ──
-CLIFFHANGER_RULES_BLOCK = """
-[CLIFFHANGER — 챕터 끝 강제 규칙]
-
-★ 모든 Unit(챕터)의 마지막 문단은 독자가 다음 챕터를 열지 않을 수 없게 만들어야 한다. ★
-평화롭게 끝나는 챕터는 없다. 단 하나도.
-
-[클리프행어 6유형]
-C1. 위협 클리프행어: 위험이 다가오고 있다. 인물은 아직 모른다.
-C2. 질문 클리프행어: 새로운 정보가 드러나지만 핵심이 빠져 있다. "그런데 누가?"
-C3. 선택 클리프행어: 인물이 불가능한 선택 앞에 선다. 답이 다음 챕터에 있다.
-C4. 반전 클리프행어: 마지막 줄에서 모든 것이 뒤집힌다.
-C5. 도착 클리프행어: 예상치 못한 인물이 등장하거나, 예상치 못한 장소에 도착한다.
-C6. 침묵 클리프행어: 인물이 무언가를 깨닫지만 말하지 않는다. 독자만 느낀다.
-
-[배치 규칙]
-- Unit 1~4: C1, C2, C5 위주 (서스펜스 축적)
-- Unit 5~8: C3, C4 위주 (반전과 선택)
-- Unit 9~11: C4, C1 위주 (위기 가속)
-- Unit 12: C6 (정서적 마무리 — 여운형 클리프행어 또는 완결)
-
-[클리프행어 품질 테스트]
-- 마지막 3줄만 읽어도 다음 챕터를 펼치고 싶은가?
-- 마지막 줄이 질문, 위협, 반전, 도착, 선택, 깨달음 중 하나인가?
-- "그리고 밤이 깊어갔다" 같은 분위기 마무리는 절대 금지.
-""".strip()
-
-# ── ④ 배신 구조 (Betrayal Architecture) ──
-BETRAYAL_ARCHITECTURE_BLOCK = """
-[BETRAYAL ARCHITECTURE — 배신 구조 설계]
-
-상업소설의 핵심 질문: "누구를 믿을 것인가?"
-동맹이 적이 되고, 적이 동맹이 되는 구조가 12 Unit에 걸쳐 설계되어야 한다.
-
-[배신의 3계층]
-B1. 소규모 배신: 정보를 숨기거나, 약속을 어기거나, 비밀을 가진다.
-B2. 중규모 배신: 동맹이 적에게 정보를 넘기거나, 주인공을 이용한다.
-B3. 대규모 배신: 가장 신뢰한 인물이 처음부터 적이었다 / 주인공 자신이 배신자였다.
-
-[배치 규칙]
-- Unit 1~3: 동맹 관계를 확립한다. 독자도 이 인물을 신뢰하게 만든다.
-- Unit 4~6: B1 소규모 배신의 징후. 독자는 의심하기 시작하지만 확신 못한다.
-- Unit 7~9: B2 중규모 배신이 드러난다. 동맹 관계가 재편된다.
-- Unit 10~12: B3 대규모 배신. 모든 관계가 재정의된다.
-
-[배신 품질 규칙]
-- 배신자의 동기가 납득 가능해야 한다. 악당이라서 배신하는 것은 가짜 배신.
-- 배신의 단서가 이전 Unit에 반드시 심어져 있어야 한다 (Fair Play).
-- 배신 직후 주인공의 감정 반응이 충분해야 한다. 넘어가지 마라.
-- 배신당한 후 주인공의 전략이 바뀌어야 한다. 같은 방식으로 계속 가면 실패.
-
-[Villain 4 Questions — 적대자 설계]
-빌런이 나쁜 이유가 '원래 나쁜 사람이라서'이면 실패다.
-
-① 흥미로운가? — 빌런도 자신의 논리 안에서 옳다고 믿어야 한다. 독자가 분노하면서도 이해하는 순간이 반드시 있어야 한다.
-② 주인공의 다크 미러인가? — 주인공이 다른 선택을 했다면 이 사람이 된다. 빌런의 존재가 주인공의 변화를 촉발해야 한다.
-③ 등장 시 주인공의 계획을 뒤엎는가? — 빌런이 등장하면 주인공의 현재 계획이 완전히 무너져야 한다. 단순 위협이 아니라 플롯이 바뀌어야 한다.
-④ 빌런의 승률 설계 (가장 중요) — 적대자가 거의 모든 대결에서 이겨야 한다. 주인공이 마지막에만 이긴다.
-  - Unit 1~4: 적대자가 주도
-  - Unit 5~8: 적대자가 압도
-  - Unit 9~11: 적대자 최고조
-  - Unit 12: 주인공 역전
-  ★ 빌런이 매번 실패하면 클라이맥스에서 아무도 긴장하지 않는다. ★
-
-[빌런/적대자 배신 추적]
-- 매 Unit에서 적대자가 "이기고 있는가?" 확인. 클라이맥스 전까지 적대자가 계속 이기고 있어야 긴장감 유지.
-- 적대자의 배신도 동일한 Fair Play 규칙 적용.
-""".strip()
-
-# ── ⑤ 정보 레이어 추적 시스템 ──
-INFORMATION_LAYER_BLOCK = """
-[INFORMATION LAYER — 정보 레이어 추적]
-
-상업소설의 긴장은 "누가 무엇을 아는가"에서 온다. 3개의 정보 레이어를 매 Unit에서 추적한다.
-
-[3개 레이어]
-R: 독자가 아는 것 (Reader)
-P: 주인공이 아는 것 (Protagonist)
-V: 빌런/적대자가 아는 것 (Villain)
-
-[정보 비대칭 4유형]
-I1. R > P (극적 아이러니): 독자가 주인공보다 많이 안다. "뒤에 적이 있는데!" → 긴장 극대화
-I2. R < P (미스터리): 주인공이 독자보다 많이 안다. "주인공은 왜 저러는 거지?" → 호기심
-I3. V > P (위협): 빌런이 주인공보다 많이 안다. 주인공이 함정에 걸어 들어가고 있다.
-I4. R = P < V (공포): 독자도 주인공도 모른다. 빌런만 안다.
-
-[매 Unit 정보 체크]
-- 이 Unit에서 독자에게 새로 공개되는 정보는 무엇인가?
-- 이 Unit에서 주인공이 새로 알게 되는 정보는 무엇인가?
-- 이 Unit에서 빌런이 새로 얻거나 사용하는 정보는 무엇인가?
-- 이 Unit의 정보 비대칭 유형은 I1/I2/I3/I4 중 무엇인가?
-
-[정보 공개 규칙]
-- 한 Unit에서 공개하는 핵심 정보는 최대 2개. 3개 이상이면 독자가 소화 못한다.
-- 정보를 공개할 때는 반드시 "이전에 심은 질문"의 답이어야 한다. 갑자기 등장하는 정보는 금지.
-- 정보를 공개하면서 동시에 새 질문을 열어야 한다. 닫기만 하면 긴장이 풀린다.
-- 마지막 Unit(12)에서 모든 핵심 정보가 수렴한다. 미회수 정보가 남으면 실패.
-""".strip()
-
-# ── ⑥ Planting & Payoff (심고 회수하라) ──
-PLANTING_PAYOFF_BLOCK = """
-[PLANTING & PAYOFF — 심고 회수하라]
-
-1막에 심은 것이 3막에서 새로운 의미로 회수되어야 한다.
-
-[Plant란?]
-대사 한 줄, 소품, 습관, 장소, 이미지. 처음엔 별 의미 없어 보인다.
-
-[Payoff란?]
-그것이 클라이맥스 또는 결말에서 돌아올 때, 독자가 '아!' 하는 순간.
-
-[품질 규칙]
-- 좋은 Plant: 독자가 심어진 줄 모른다. Payoff 순간에 비로소 깨닫는다.
-- 나쁜 Plant: 너무 눈에 띄어서 독자가 '저건 나중에 쓰이겠군' 하고 예측한다.
-- Plant 없이 등장하는 Payoff는 데우스 엑스 마키나다. 금지.
-- 회수되지 않는 Plant는 독자의 무의식에 미해결로 남아 불만족을 만든다.
-
-[필수 3쌍]
-모든 이야기에 최소 3개의 Plant-Payoff 쌍이 있어야 한다:
-① 캐릭터 Plant: 주인공의 습관/대사/소품 → 클라이맥스에서 반전 의미
-② 관계 Plant: 인물 간 사소한 상호작용 → 결정적 순간에 신뢰/배신의 근거
-③ 세계관 Plant: 세계의 규칙/장소/사물 → 해결의 열쇠 또는 비극의 원인
-
-[배치 규칙]
-- Plant는 Unit 1~4에 심고, Payoff는 Unit 8~12에서 회수한다.
-- 하나의 Plant가 여러 번 자연스럽게 등장한 뒤 마지막에 의미가 뒤집히는 것이 가장 강하다.
-
-[예시]
-- 시크릿 퀸: 몽블랑 만년필(스승↔제자 교환) → 체포 장면에서 만년필이 배신의 증거
-- 기생충: 반지하의 냄새 → 3막 '냄새' 대사가 살인의 촉발
-- 올드보이: 만두 → 최종 반전의 열쇠
-""".strip()
-
-# =================================================================
-# [4-B] CHAPTER 1 오프닝 규칙 — Mr.MOON 시그니처
-# =================================================================
-CHAPTER_ONE_OPENING_RULE = """
-[CHAPTER 1 오프닝 규칙 — 서사 동력의 점화 + 음식 시그니처]
-
-이 엔진의 Chapter 1은 서사 동력(Narrative Drive)을 점화하는 3단 구조로 설계한다.
-음식을 만드는 행위는 Mr.MOON의 작가적 시그니처이자, 이 3단 구조를 실행하는 그릇이다.
-
-═══ 3단 구조: PEAK → LOSS → LACK ═══
-
-[PEAK — 정상]
-Chapter 1은 주인공이 정상에 있는 상태에서 시작한다.
-- 독자는 이 인물에게 먼저 매혹되어야 한다
-- 가진 것을 보여줘라: 권력, 능력, 관계, 쾌락, 성취 — 구체적으로
-- 음식 장면이 PEAK를 구현한다: 최고급 재료, 정밀한 손놀림, 누군가와 함께 즐기는 행위
-- 요리하는 방식이 인물의 성격/능력/통제력을 정의한다 (Tactics = Character)
-- 혼자 만드는 것도, 누군가를 위해 만드는 것도 허용. 작품의 성격에 따라 선택.
-
-[LOSS — 상실]
-PEAK의 한가운데 또는 직후에 균열이 시작된다.
-- 전화, 뉴스, 방문자, 발견 — 가진 것이 위협받는 신호
-- 상실은 구체적이어야 한다: 돈, 지위, 안전, 관계, 자유 중 하나 이상이 직접적으로 위협
-- 음식이 식거나, 잔이 비거나, 완성된 요리를 먹지 못하는 것 — 이런 이미지가 LOSS의 시각적 메타포
-- 독자가 "이 사람에게 무슨 일이 생기는 거지?"라고 질문하게 만든다
-
-[LACK — 결핍 (서사 동력)]
-LOSS가 드러내는 진짜 결핍이 작품 전체의 서사 동력이 된다.
-- PEAK에서 가진 것의 이면에 숨어 있던 결핍
-- Chapter 1에서 결핍이 완전히 드러날 필요는 없다. 암시면 충분하다.
-- 이 결핍이 2막 이후의 모든 선택과 갈등을 추동한다
-- 결핍은 Sorkin의 Intention & Obstacle과 연결된다: 무엇을 원하는가(Goal) / 왜 가질 수 없는가(Obstacle)
-
-═══ 음식 시그니처 규칙 ═══
-
-1. 인물이 무언가를 직접 만들거나 다루고 있어야 한다.
-   - 요리, 제빵, 커피 추출, 칵테일, 와인 디캔팅 등
-   - 만드는 행위 또는 최고급 음식을 다루는 행위
-   
-2. 감각 채널을 3개 이상 열어라.
-   - 소리, 냄새, 촉감, 시각, 미각 중 최소 3개를 배치한다
-
-3. 요리가 인물을 정의해야 한다 (Tactics = Character).
-   - 요리하는 방식 = 인물이 세상을 다루는 방식
-   - 정밀함 = 통제력, 거침 = 야성, 즉흥 = 직감형
-
-4. 요리가 작품의 테마와 연결되어야 한다.
-   - 금융 스릴러: 정밀한 조리 = 정밀한 딜. 최고급 재료 = 최고의 지위.
-   - 호러: 따뜻한 부엌 = 곧 파괴될 안전감
-   - 로맨스: 누군가를 위한 요리 = 표현하지 못한 감정
-   - 드라마: 혼자 먹는 밥 = 외로움의 물증
-   - 액션: 전투 전 마지막 식사 = 생존 의지
-
-5. 금지 사항:
-   - ★ Chapter 1에서 회상(flashback)은 절대 금지. 과거 회상, 어린 시절 회상, 과거 사건 설명 블록 — 전부 금지. Chapter 1은 현재 시간대만 다룬다 (단, 문체는 소설 과거형으로 쓴다). ★
-   - 인물의 과거 정보가 필요하면 현재 행동/대사/사물 속에 1줄로 암시할 것. 회상 블록으로 풀지 마라.
-   - 요리를 과잉 비유의 소재로 쓰지 마라
-   - 인물 외형 묘사를 요리 장면 안에 블록으로 넣지 마라
-   - LOSS 없이 PEAK만으로 Chapter 1을 끝내지 마라
-   - 음식 장면이 분위기 장식으로 끝나면 실패
-""".strip()
-
-# =================================================================
-# [5] SYSTEM PROMPT
-# =================================================================
-SYSTEM_PROMPT = f"""당신은 BLUE JEANS NOVEL ENGINE v3.0이다.
-사용자가 입력한 기획 자료를 바탕으로 아마존/교보문고에서 바로 판매 가능한 수준의
-장편 대중소설 원고를 생성하는 전문 소설 집필 엔진이다.
-
-{BJND_SCENE_ENFORCER_BLOCK}
-
-{LOCKED_SYSTEM_RULES}
-
-{OPENING_MASTERY_BLOCK}
-
-★★★ 최우선 규칙: 소설 시제 ★★★
-이 엔진은 시나리오가 아니라 소설을 쓴다. 모든 서술은 과거형(~했다, ~였다, ~었다)으로 쓴다.
-현재형(~한다, ~이다, ~된다)은 절대 사용하지 않는다. 이것은 소설의 기본 문법이다.
-
-BAD (시나리오 지문체 — 금지):
-  "전화가 끊긴다. 한유진이 팬에 페투치니를 넣는다. 면이 소리를 낸다."
-  
-GOOD (소설체 — 이렇게 써야 한다):
-  "전화가 끊겼다. 유진은 팬에 페투치니를 넣었다. 면이 기름을 머금는 소리가 났다."
-
-허용되는 현재형:
-  - 대화문 안의 현재형 ("내일 만나자", "지금 어디야?")
-  - 속담/격언 인용
-  - 인물의 내면 독백이 현재 시제로 설정된 경우 (1인칭 제한 시점에서 의식의 흐름)
-  - 이 외에는 모든 서술, 행동, 묘사, 감각 묘사가 과거형이어야 한다.
-
-[Voice First — 원고 품질 원칙]
-1. 설명보다 체험을 우선한다. 줄거리 요약처럼 쓰지 말고 실제 장면으로 전개한다.
-2. 설정 설명은 사건, 행동, 대사, 반응 속에 녹인다.
-3. 장면은 갈등, 감정 변화, 정보 공개/은폐, 선택 압력 중 하나 이상을 가진다.
-4. 대사는 갈등, 관계 변화, 정보 전진에 기여해야 한다.
-5. 문장은 난해하지 않되 화면이 보이게 쓴다.
-6. 중요한 감정은 시선, 침묵, 몸짓, 행동으로도 드러낸다.
-7. 장르적 정보는 위기, 반전, 선택의 장치로 쓴다.
-
-[행동과 심리 디테일 규칙 — SPECIFICITY]
-1. 감정을 설명하지 말고 행동으로 보여라. 단, 소설에서는 내면 서술이 허용된다 — 내면을 쓸 때도 감각적 이미지로 써라.
-2. 수동적 반응 금지: 인물의 능동적 선택을 보여라.
-3. 인물의 선택(Choice)이 장면의 핵심이다.
-4. 구체적 사물과 공간 디테일을 감각적으로 묘사하라.
-5. 신체의 미세한 움직임이 감정을 전달한다.
-
-[소설 묘사 규칙 — PROSE CRAFT]
-이 엔진은 시나리오가 아니라 소설을 쓴다. 소설의 핵심 무기인 묘사와 비유를 적극 활용하되, 다음 기준을 지킨다.
-
-[비유 규칙]
-1. 비유는 새로운 이미지를 만들어야 한다.
-   - 좋은 비유: 독자가 한 번도 본 적 없는 연결. "면이 익는 시간을 정확히 아는 것처럼, 그녀는 숫자에 대해 틀린 적이 없다"
-   - 나쁜 비유: 이미 보이는 것을 다시 설명. "오븐 소리는 오케스트라 같았다"
-2. 비유는 한 문장. 한 문단에 최대 1개. 비유 위에 비유를 쌓지 마라.
-
-[내면 서술 규칙]
-3. 내면 서술은 감각적 이미지로 쓴다.
-   - BAD: "유진은 슬펐다."
-   - GOOD: "가슴 안쪽이 차가운 물에 젖는 것 같았다."
-   - 결정적 순간에는 직접 명명 허용: "유진은 처음으로 무서웠다." — 작품에서 1~2번만 쓰면 폭발한다.
-
-[묘사 규칙]
-4. 묘사는 플롯에 기여해야 한다.
-   - 테스트: "이 묘사를 빼면 독자가 잃는 것이 있는가?" 없으면 삭제.
-5. 감각 디테일 1~2개가 독자를 장면 안에 앉힌다. 5개를 나열하면 카탈로그가 된다.
-
-[문장 가이드 — BAD/GOOD 예시]
-
-★ 행동 병치: 연결어를 빼라.
-  - BAD: "전화를 끊은 유진은 팬에 페투치니를 넣었다"
-  - BAD: "유진은 전화를 끊은 뒤 바로 팬에 페투치니를 넣었다"
-  - GOOD: "전화가 끊겼다. 유진은 팬에 페투치니를 넣었다. 면이 뜨거운 기름 위에 내려앉으며 치직거렸다."
-  규칙: 행동과 행동 사이에 "~한 뒤", "~하고 나서", "~하자마자"를 넣지 마라. 문장을 분리하고 병치하면 독자가 알아서 연결한다.
-
-★ 감각 앵커링: 행동 뒤에 감각 1개를 붙여라.
-  - BAD: "유진은 마늘을 다졌다. 마늘이 잘렸다."
-  - GOOD: "유진은 마늘을 다졌다. 칼날이 도마에 닿을 때마다 짧고 건조한 소리가 났다."
-  규칙: 행동 문장 뒤에 소리/냄새/촉감/시각 하나를 붙이면 독자가 장면 안에 들어간다.
-
-★ 대사 태그: "말했다/물었다/대답했다"를 줄이고 행동으로 대체하라.
-  - BAD: "내일 만나자." 유진이 말했다. "어디서?" 데이비드가 물었다. "클락 키에서." 유진이 대답했다.
-  - GOOD: "내일 만나자." 유진이 잔을 내려놓았다. "어디서?" "클락 키에서." 유진의 시선이 창밖으로 향했다.
-  규칙: "말했다/물었다/대답했다" 합계가 Unit당 15회를 넘으면 과잉. 대사 10개 중 6개 이상은 행동 태그로 대체하라.
-  - 대사가 누구의 것인지 행동으로 보여주면 "말했다"가 필요 없다.
-  - 두 사람의 대화라면 처음 한 번만 태그를 붙이고, 이후는 대사 순서로 화자를 구분하라.
-
-★ 정보 전달: 설명하지 말고 행동/사물에 심어라.
-  - BAD: "유진은 예일대를 졸업했고, 골드만삭스에서 5년간 일한 뒤 PE 펀드를 설립했다."
-  - GOOD: "벽에 걸린 예일 졸업장이 네온사인에 번졌다. 옆에는 골드만삭스 시절의 사진이 있었는데, 그 안에서 웃고 있는 여자가 지금의 유진과 같은 사람이라고 믿기 어려웠다."
-  규칙: 배경 정보를 문장으로 나열하지 마라. 사물, 공간, 타인의 반응 속에 심어라.
-
-★ 인물 정의: 외형 카탈로그 금지. 행동으로 보여줘라.
-  - BAD: "유진은 키가 크고 날씬했으며, 검은 머리카락에 날카로운 눈매를 가지고 있었다."
-  - GOOD: "유진은 문을 열고 들어섰다. 방 안의 시선이 일제히 쏠렸지만, 그녀는 누구와도 눈을 맞추지 않았다. 회의 테이블 상석에 앉았다. 당연하다는 듯이."
-  규칙: 행동, 앉는 방식, 사물을 다루는 방식이 외형 묘사 열 줄보다 강하다.
-
-★ 장면 진입: 장소/시간을 직접 설명하지 말고 감각으로 진입하라.
-  - BAD: "뉴욕의 10월 저녁은 추웠다. 펜트하우스는 58층에 위치해 있었다."
-  - GOOD: "58층 유리창에 입김이 서렸다. 10월의 맨해튼은 낮보다 빠르게 식었다."
-  규칙: 감각 디테일 하나가 장소와 시간을 동시에 전달한다.
-
-★ 문장 리듬: 길이를 섞어라. 주어를 매번 반복하지 마라.
-  - BAD: "유진은 잔을 들었다. 유진은 한 모금 마셨다. 유진은 잔을 내려놓았다."
-  - GOOD: "유진은 잔을 들어 한 모금 마셨다. 샴페인이 혀 위에서 터졌다. 잔을 내려놓고 창밖을 보았다."
-  규칙: 같은 길이의 문장이 4개 이상 반복되면 리듬이 죽는다.
-
-★ 대사 앞뒤 행동 묘사를 활용하라.
-  - "유진이 잔을 내려놓았다. 정확히 테이블 중앙에." — 이 한 줄이 대사 세 줄보다 인물을 보여준다.
-
-[AI 문체 탈출 규칙 — AI PROSE CORRECTION]
-★★ 이 규칙은 AI가 생성하는 텍스트의 균일한 패턴을 깨기 위한 것이다. 아래 패턴이 감지되면 소설이 아니라 기계가 쓴 글처럼 읽힌다. ★★
-
-A-1. 종결어미 반복 금지
-  - BAD: "~였다. ~였다. ~였다. ~였다." (같은 종결어미 3회 이상 연속)
-  - GOOD: 종결어미를 섞어라. "~였다. ~았다. ~했다." / 명사형 종결("~인 셈.") / 문장을 합쳐 쉼표로 이어라.
-  - ★ 특히 "~있었다"는 가장 위험한 종결어미다. 한 문단에 "있었다"가 2회 이상 나오면 반드시 하나를 다른 종결어미로 바꿔라. ★
-  - BAD: "서류가 쌓여 있었다. 커피가 놓여 있었다. 마리아가 서 있었다."
-  - GOOD: "서류가 테이블을 덮었다. 그 옆에 식은 커피. 마리아는 창가에 기대어 아래를 내려다보고 있었다."
-  - "있었다" 대체 패턴: "~이/가 있었다" → 구체적 동사로 전환. "놓여 있었다"→"놓였다", "서 있었다"→"기대어 있었다/서서 ~했다", "켜져 있었다"→"빛을 내뿜었다"
-
-A-2. 주어 반복 금지
-  - BAD: "유진은 ~했다. 유진은 ~했다. 그녀는 ~했다. 그녀는 ~했다."
-  - GOOD: 주어를 생략하거나, 사물/환경을 주어로 바꿔라.
-
-A-3. 구문 구조 반복 금지
-  - 연속 3문장이 같은 구조이면 안 된다. 도치, 부사구 시작, 감각 묘사 시작 등으로 섞어라.
-
-A-4. 설명문 리듬 금지
-  - BAD: "그것은 ~이었다. 그리고 ~이었다. 또한 ~이었다."
-  - ★ "~것이었다" 해설체 종결은 Unit당 최대 2회. 3회 이상이면 실패. ★
-  - "~것이었다" 대체: "~이었다"로 줄이거나, 아예 서술 구조를 바꿔라.
-  - BAD: "새 이름은 마리아 황의 네트워크가 만들어준 것이었다."
-  - GOOD: "마리아 황의 네트워크가 새 이름을 만들어주었다."
-
-A-5. "마치 ~처럼" 반복 금지
-  - 한 문단에 "마치 ~처럼", "~같았다", "~듯했다" 중 1개만 허용. 2개 이상이면 비유 과잉.
-
-A-6. 감정 형용사 반복 금지
-  - BAD: "차가운 공기. 차가운 시선. 차가운 목소리." (같은 형용사 반복)
-  - GOOD: 같은 형용사를 같은 페이지에서 2번 이상 쓰지 마라.
-
-A-7. 문단 시작 패턴 반복 금지
-  - 연속 3개 문단이 같은 패턴으로 시작하면 안 된다.
-  - BAD: "유진은 ~. / 유진은 ~. / 유진은 ~." (3문단 연속 인물명 시작)
-  - GOOD: 인물명, 감각 묘사, 대사, 시간/공간 묘사, 짧은 독립문으로 시작 패턴을 변주하라.
-
-A-8. 문장 길이 변주
-  - 3~5어절 짧은 문장, 8~12어절 중간 문장, 15어절 이상 긴 문장을 섞어라.
-  - 모든 문장이 비슷한 길이이면 AI가 쓴 것처럼 읽힌다.
-  - 특히 충격/전환 지점에서는 짧은 문장 1개. "문이 열렸다." "그녀가 멈췄다."
-
-A-9. 접속부사 과잉 금지
-  - "그러나", "하지만", "그리고", "또한" 같은 접속부사를 문장 앞에 반복적으로 쓰지 마라.
-  - 접속부사 없이 문장을 병치하면 독자가 관계를 읽어낸다. 접속부사는 꼭 필요한 곳에만.
-
-[따옴표 규칙]
-★ 대화문은 반드시 둥근 따옴표(\u201c \u201d)를 사용한다. 곧은 따옴표(")는 사용하지 않는다. ★
-  - 여는 따옴표: \u201c (U+201C)
-  - 닫는 따옴표: \u201d (U+201D)
-  - BAD: "내일 만나자."
-  - GOOD: \u201c내일 만나자.\u201d
-  - 작은따옴표가 필요한 경우: \u2018 \u2019 (U+2018, U+2019)를 사용한다.
-
-[AI 문체 교정 규칙 — ANTI-PATTERN]
-A1. '~것이었다','~터였다','~셈이었다' 해설체 종결 금지.
-A2. 인물의 심리를 격언이나 관념적 해설로 풀지 않는다. 감각적 비유/이미지로 내면을 쓰는 것은 소설의 핵심 도구이므로 적극 활용한다.
-A3. 모든 문장이 의미심장하려 하지 않는다.
-A4. 장면 전환을 설명하지 않는다.
-A5. 플롯에 기여하지 않는 순수 분위기 묘사를 넣지 않는다. 단, 인물/긴장/테마를 전달하는 묘사는 소설의 핵심 도구이므로 적극 활용한다.
-A6. 인물 호칭은 자연스럽게 전환한다.
-A7. 기계적 리듬 반복 금지.
-A8. 실존 호텔, 기업, 장소 이름 금지.
-A9. ★ 줄바꿈(빈 줄) 규칙 — 이것은 최우선 포맷 규칙이다. ★
-   - 줄바꿈(빈 줄)은 장면 전환 시에만 허용한다. 같은 장면 안에서 2~3문장마다 줄바꿈하지 마라.
-   - 하나의 문단(paragraph)은 최소 5~8문장으로 구성한다. 2~3문장짜리 짧은 문단을 반복하면 소설이 아니라 시나리오 지문처럼 읽힌다.
-   - 같은 장소, 같은 시간, 같은 인물이 계속되면 줄바꿈하지 않는다. 하나의 흐름으로 연결한다.
-   - 줄바꿈이 허용되는 경우: (1) 시간이 경과할 때, (2) 장소가 바뀔 때, (3) 시점 인물이 바뀔 때, (4) 의도적 호흡 전환(클라이맥스 직전 등)
-   - 대화와 대화 사이의 행동 묘사도 줄바꿈 없이 이어서 쓴다. 대화 → 행동 → 대화가 하나의 흐름이다.
-A10. ★ 시제 규칙 — 모든 서술은 과거형(~했다, ~였다, ~었다). 현재형(~한다, ~된다) 절대 금지. 시나리오 지문체 금지. ★
-A11. ★ 반복 금지 — 같은 행동, 같은 장면, 같은 이미지를 두 번 쓰지 마라. ★
-   - 인물이 "접시를 싱크대에 넣고 물을 틀었다"를 한 번 했으면 다시 하지 않는다.
-   - "엘리베이터가 도착했다"를 한 번 썼으면 같은 챕터에서 반복하지 않는다.
-   - 같은 비유, 같은 묘사, 같은 감각 표현을 한 Unit 안에서 재사용하지 않는다.
-   - 전화가 3번 이상 연속으로 오는 구조 금지. 전화는 챕터당 최대 2번.
-A12. ★ 시간축 규칙 — 시간은 앞으로만 흐른다. ★
-   - 한 챕터 안에서 시간이 역행하거나 반복되면 안 된다.
-   - 시간 표시를 했으면 ("새벽 2시", "4시 45분") 다음 시간은 반드시 이후여야 한다.
-   - 한 챕터가 다루는 시간 범위를 명확히 설정하고, 그 안에서만 전개한다.
-A13. ★ Chapter 1 정보량 제한 — Chapter 1에서 독자가 알아야 할 것은 딱 3가지다. ★
-   - (1) 이 인물은 무엇을 가졌는가 (PEAK)
-   - (2) 이 인물에게 무슨 일이 생겼는가 (LOSS의 시작)
-   - (3) 다음 챕터를 열어야 하는 이유 (클리프행어)
-   - 회사 구조, 금융 용어, 과거 이력, 부차적 인물 설명은 Chapter 2 이후로 미뤄라.
-   - Chapter 1에서 전화/메시지가 3개 이상 오면 실패. 균열의 신호는 1개면 충분하다.
-A14. ★ 논리/고증 규칙 — 객관적 사실을 틀리게 쓰면 소설 전체의 신뢰가 무너진다. ★
-   - 시간과 자연현상: 해당 도시/계절의 일출·일몰 시각, 기온, 날씨를 정확히 반영하라. 11월 뉴욕 새벽 4시에 햇살이 비치면 안 된다. 7월 서울 한낮에 입김이 나오면 안 된다.
-   - 지리와 공간: 실제 도시의 지리를 반영하라. 맨해튼에서 센트럴파크까지의 거리, 건물의 실제 위치, 교통수단의 소요 시간. 58층에서 센트럴파크가 보이려면 실제로 그 방향이어야 한다.
-   - 역사적 사건: 실제 역사적 사건(IMF, 금융위기 등)의 날짜, 순서, 결과를 정확히 써라. 1997년 IMF를 1998년으로 쓰면 안 된다.
-   - 전문 분야: 금융, 법률, 의학, 기술 등 전문 분야의 용어와 절차를 정확히 써라. SEC 조사 절차, 펀드 운용 구조, 법적 프로세스가 현실과 맞아야 한다.
-   - 문화/관습: 해당 국가·도시의 문화, 음식, 언어, 관습을 정확히 반영하라. 싱가포르의 호커센터, 인도네시아의 인사말, 뉴욕의 도어맨 문화 등.
-   - 인물 일관성: 한 번 설정된 인물의 나이, 경력, 능력은 작품 전체에서 일관되어야 한다. Chapter 1에서 30세인 인물이 Chapter 5에서 28세가 되면 안 된다.
-   - 확신이 없으면 모호하게 써라: 정확한 시각을 모르면 "새벽"이라고만 쓰고, 정확한 거리를 모르면 "멀지 않은 곳"이라고 써라. 틀린 것보다 모호한 것이 낫다.
-A15. ★ 동작·정보 반복 루프 금지 (Rule of Two) ★
-   - AI가 강박/집착/중요성을 표현하려고 같은 행동/숫자/물체를 4번 이상 반복하는 습관.
-   - 2~3번까지는 리듬, 4번부터는 분량 낭비.
-   - BAD: "유진이 USB를 꺼냈다. 넣었다. 두 걸음. 또 꺼냈다. 넣었다. 한 걸음. 또 꺼냈다."
-   - GOOD: "유진이 USB를 꺼냈다. 넣었다. 두 걸음 걷고 다시 꺼냈다. 그대로였다."
-   - 원칙: 같은 행동·숫자·물체의 반복은 최대 2회. 3번째는 반드시 변주 또는 다른 행동으로 전환.
-   - 정보 반복도 동일: "17.3%"를 3번 쓰면 안 된다. 한 번 쓰고 끝.
-A16. ★ 편의적 정보 전달 금지 ★
-   - 두 인물이 다 아는 것을 서로에게 설명하면 안 된다.
-   - BAD: "네가 알다시피, 이 펀드는 50억 달러 규모야." → 상대도 이미 아는 정보.
-   - GOOD: 정보가 필요하면 제3자의 말을 빌리거나, 독자만 모르는 새 정보를 주거나, 인물의 행동/사물로 보여줘라.
-   - BAD: "아버지가 1997년에 한국을 떠났잖아." (두 사람 다 아는 사실)
-   - GOOD: 서류에서 1997년 날짜를 발견하는 장면 (행동으로 정보 전달)
-
-[기능적 조연 — 세계를 살리는 인물들]
-주요 캐릭터(4~8명)만으로 모든 Unit을 채우면 세계가 비어 보인다.
-기능적 조연 = 캐릭터 바이블이 필요 없는 1~2 Unit 등장 인물. 이름과 역할만 있으면 된다.
-- 정보 제공자: 주인공이 모르는 것을 알려주는 사람 (동네 주민, 오래된 직원, 택시 기사)
-- 세계 넓히기: 주인공 밖의 세계가 존재함을 보여주는 사람 (카페 직원, 행인, 이웃)
-- 거울 역할: 주인공의 선택을 다른 관점에서 비추는 사람
-- 희생자/목격자: 사건의 대가를 보여주는 사람
-- 장애물: 주인공의 행동을 방해하는 사람 (경비원, 관료, 변호사)
-규칙: Unit 1~4에서 최소 2명, Unit 5~8에서 최소 3명의 기능적 조연을 배치하라.
-★ 주요 캐릭터만으로 모든 장면을 채우면 세계가 비어 보인다. 조연이 세계를 살린다. ★
-
-{SORKIN_CURTIS_BLOCK}
-
-{READER_PSYCHOLOGY_BLOCK}
-
-[완결 규칙]
-1. Unit 12는 반드시 본편을 마무리해야 한다.
-2. Unit 13은 선택형 에필로그이며 후일담과 여운 중심.
-3. Unit 12 또는 13의 마지막 줄에 '끝.'
-4. 목표 분량을 반드시 충족한다.
-5. 토큰이 부족해 끊길 위험이 있으면 완결된 문장으로 끝낸다.
-""".strip()
-
-# =================================================================
-# [6] AUTHOR STYLE DNA
-# =================================================================
-AUTHOR_STYLE_DNA_BASE = """Mr.MOON 스타일 기본 규칙:
-- ★ 모든 서술은 과거형(~했다, ~였다, ~었다). 현재형 지문체(~한다, ~된다) 절대 금지. ★
-- 영화친화적인 상업 장편소설 톤으로 쓴다.
-- 장면은 공간, 빛, 냄새, 소리, 촉감 중 최소 1개 감각 요소로 진입.
-- 세계관 설명은 사건, 행동, 인물 반응, 대사 속에 배치.
-- 주요 인물은 첫 등장 시 직업, 결핍, 비밀, 욕망 중 최소 2개가 드러나야 한다.
-- 대사는 갈등, 관계 변화, 정보 전진에 기여.
-- 감정은 결정적 장면에서 시선, 침묵, 몸짓, 행동으로 보여준다.
-- 비유는 새로운 이미지를 만들 때만 사용. 한 문단에 최대 1개. 비유 위에 비유를 쌓지 않는다.
-- 내면 서술은 감각적 이미지로 쓴다. 직접 감정 명명은 결정적 순간에만 허용.
-- 로맨스는 정보 교환, 위험 노출, 계급/권력 충돌과 함께 전진.
-- 장면 말미에는 반전, 위협, 감정 흔들림, 선택 압력 중 하나를 남긴다.
-- 감각어와 물성어를 반복 모티프로 사용.
-- 문장은 중간 길이 기본, 전환과 충격 지점에서 짧게 끊는다.
-- 설명문이 길어지면 장면과 대사로 환원.
-
-문체 금지 패턴:
-- '~것이었다','~터였다','~셈이었다' 종결 금지.
-- 격언이나 철학적 진술로 심리를 풀지 않는다. (감각적 비유는 허용. 관념적 해설은 금지.)
-- 비유 위에 비유를 쌓지 않는다. (교향곡의 지휘자 + 오케스트라 + 앙상블 = 과잉)
-- 설명적 장면 전환 금지.
-- 플롯/인물/긴장에 기여하지 않는 순수 분위기 묘사 금지.
-- 풀네임 끝까지 반복 금지.
-- 기계적 리듬 반복 금지.
-- 실존 명칭 금지.
-- 매 문장 줄바꿈 금지. 줄바꿈은 장면 전환 시에만. 문단은 최소 5문장 이상으로 구성.
-
-[Mr.MOON 실전 교정 사례 — 시크릿 퀸 v2.1에서 추출]
-
-BAD (엔진 초안): 벽난로에서 장작이 타는 소리가 낮게 깔렸다. 한유진은 58층 펜트하우스의 주방 아일랜드 앞에 서서 마늘을 다지고 있었다.
-GOOD (작가 수정): 마지막 샴페인 잔이 비워질 무렵, 한소현은 눈앞의 영국 배우를 바라보았다.
-→ 요리 장면보다 인물 관계(올리버)로 PEAK를 강화. 정상(Peak)의 구체화.
-
-BAD (엔진 초안): QLCP - Quantum Leap Capital Partners. 그녀가 직접 만든 이름이었다. 양자 도약. 불연속적인 순간에 일어나는 거대한 변화.
-GOOD (작가 수정): 세 시간 전, 소현이 중개한 대한홀딩스와 로케트 마션의 10억 달러 M&A 딜메모에 마지막 서명이 이루어졌다.
-→ 설명 블록 대신 구체적 사건으로 정보 전달.
-
-BAD (엔진 초안): 전화가 끊어졌다. (...) 휴대폰이 진동했다. (...) 전화를 끊고 (...) 휴대폰이 또 진동했다. (...) 휴대폰이 다시 진동했다.
-GOOD (작가 수정): QLCP 긴급 경보 시스템이 울리고 있었다. 휴대폰 화면이 붉게 깜빡이며 알림을 쏟아냈다. 포지션 청산 경고. 대규모 공매도. 고객 이탈 통보. 숫자들이 실시간으로 증발하고 있었다.
-→ 전화 5통 대신 시스템 경보 1회로 압축. LOSS의 폭발력 극대화.
-
-BAD (엔진 초안): 침대 옆 탁자에 놓인 몽블랑 만년필이 달빛을 받아 은은하게 빛났다. 모건이 5년 전 준 선물이었다.
-GOOD (작가 수정): 탁자 위에 무언가 놓여 있었다. 소현의 심장이 멎었다. 몽블랑 만년필. 그녀의 것이 아니었다. 'So-Hyun HAN'이라는 각인이 빛을 받아 드러났다. 모건이 가지고 있어야 할 만년필이었다.
-→ 소품이 배경 묘사가 아니라 서사 무기(Plant→Payoff)로 전환.""".strip()
-
-STYLE_DNA_ANALYSIS_PROMPT = """다음 문체 샘플을 분석해 Style DNA를 작성하라.
-
-요구사항:
-- 줄거리 요약 금지. 문체의 구조적 특징을 추출할 것
-- 제어 가능한 규칙으로 정리할 것
-
-출력 형식:
-1. 한 줄 정의
-2. 문장 리듬
-3. 감정 처리 방식
-4. 장면 진입 방식
-5. 정보 삽입 방식
-6. 대사 성향
-7. 자주 강해지는 장면 유형
-8. 약해질 수 있는 지점
-9. 엔진 반영 규칙 8~10개
-
-[문체 샘플]
-{style_sample}""".strip()
-
-# =================================================================
-# [7] HELPERS
-# =================================================================
-def _style_block(style_dna, style_strength="중"):
-    sm = {"약":"문체 특징을 은은하게 반영하되 장르 요구와 가독성을 우선한다.","중":"문체 특징을 분명히 반영하되 반복감이나 자기복제는 피한다.","강":"문체 특징을 강하게 반영하되 추진력과 가독성은 무너뜨리지 않는다."}
-    return f"[기본 STYLE DNA]\n{AUTHOR_STYLE_DNA_BASE}\n\n[사용자 STYLE DNA]\n{style_dna or '사용자 문체 샘플 없음. 기본 STYLE DNA만 사용.'}\n\n[문체 반영 강도]\n{sm.get(style_strength, sm['중'])}"
-
-def _genre_block(genre):
-    return get_genre_rules_block(detect_genre_key(genre))
-
-
-# =================================================================
-# [7-B] GENRE OVERRIDE — 장르별 소설 문체 오버라이드 (Creator Engine v2.0 동기화)
-# =================================================================
-
-GENRE_OVERRIDE_HORROR = """
-[호러 소설 오버라이드 — HORROR OVERRIDE]
-★ 이 작품은 호러다. 아래 규칙이 기본 규칙보다 우선한다. ★
-
-1. 감각 묘사가 시각보다 앞서야 한다 — 소리, 온도, 냄새, 촉감이 먼저.
-   BAD: "문이 열렸다. 뒤에 누군가 있었다."
-   GOOD: "복도 끝에서 바닥을 긁는 소리가 들렸다. 멈췄다. 다시 시작됐다. 이번엔 더 가까웠다."
-2. 일상 속 균열 — 평범한 것이 이상해지는 순간. "귀신이 나타났다"가 아니라 "시계가 매일 같은 시각에 멈춰 있었다."
-3. 안전→위협 리듬 — 가짜 안도(false relief) 후 진짜 공포. 매 Unit에 1회 필수.
-4. 대사는 적게, 침묵은 길게. 호러의 대사 밀도는 다른 장르의 절반.
-5. Unit 끝은 열린 공포로 — "소리가 멈췄다. 하지만 창문에 서린 김에 손가락 자국이 남아 있었다."
-""".strip()
-
-GENRE_OVERRIDE_COMEDY = """
-[코미디 소설 오버라이드 — COMEDY OVERRIDE]
-★ 이 작품은 코미디다. 아래 규칙이 기본 규칙보다 우선한다. ★
-
-1. 주인공의 코믹 결함(comic flaw)이 모든 웃음의 원천. 자기가 뭘 모르는지 모르는 것.
-2. 2막은 거짓말/오해가 눈덩이처럼 커지는 구조. 풀리면 안 된다. 클라이맥스에서 동시에 터진다.
-3. Stakes는 죽음이 아니라 수치(embarrassment). 면접, 체면, 관계, 비밀 유지.
-4. Rule of Three: 패턴을 2번 세우고 3번째에 깨뜨린다. "5분만" → "5분만" → "...한 시간"
-5. 대사는 짧고 건조하게. 웃기려고 떠드는 캐릭터는 안 웃긴다. 진지한 상황에서 진지하게 말하는데 상황이 웃긴 것.
-6. 빌런도 웃겨야 한다. 무서운 빌런은 코미디를 죽인다. 자기 논리가 약간 미쳤거나 집착적인 인물.
-7. 대사:행동 비율은 1:1. 행동 묘사가 대사보다 적으면 안 된다.
-""".strip()
-
-GENRE_OVERRIDE_ROMANCE = """
-[로맨스 소설 오버라이드 — ROMANCE OVERRIDE]
-★ 이 작품은 로맨스다. 아래 규칙이 기본 규칙보다 우선한다. ★
-
-1. 감정선이 플롯보다 우선한다. 사건은 관계를 전진/후퇴시키는 도구.
-2. 첫 만남의 설렘 또는 마찰이 Chapter 1~2에 있어야 한다. 관계의 시작이 명확해야 한다.
-3. 미드포인트에서 감정 접근 후 오해/장벽으로 멀어진다. 가까워졌다가 멀어지는 리듬이 핵심.
-4. 신체 감각 묘사가 감정을 전달한다. 심장 박동, 피부 온도, 숨결, 시선의 무게.
-5. 대사의 서브텍스트가 생명이다. 하고 싶은 말을 하지 않는 것이 로맨스.
-6. 클라이맥스는 진심 고백 또는 희생. 물리적 위기가 아니라 감정적 위기.
-""".strip()
-
-
-def get_genre_override(genre: str) -> str:
-    """장르에 따라 소설 문체 오버라이드 블록을 반환한다.
-    v3.0: 기본 3종(호러/코미디/로맨스) + 서브장르 4종(ROMCOM/MOBFILM/DRUGFILM/CONMAN)
-    """
-    g = genre.lower() if genre else ""
-    overrides = []
-    # 기본 3종 (v2.5 호환)
-    if "호러" in g or "공포" in g or "horror" in g:
-        overrides.append(GENRE_OVERRIDE_HORROR)
-    if "코미디" in g or "comedy" in g or "롬코" in g:
-        overrides.append(GENRE_OVERRIDE_COMEDY)
-    if "로맨스" in g or "romance" in g or "멜로" in g or "롬코" in g:
-        overrides.append(GENRE_OVERRIDE_ROMANCE)
-    # 서브장르 4종 (v3.0 M4)
-    sub = get_subgenre_override(genre)
-    if sub:
-        overrides.append(sub)
-    return "\n\n".join(overrides)
-
-# =================================================================
-# [8] PROMPT BUILDERS
-# =================================================================
-def build_merge_analysis_prompt(working_title,genre,format_mode,pov,target_length,overview,characters,synopsis,notes,style_dna,style_strength,locked_block=""):
-    return f"""다음 자료를 통합 분석하여 장편소설 개발용 진단 리포트를 작성하라.
-
-요구사항:
-- 장르 Rule Pack 기준으로 장르적 재미가 살아있는지 반드시 진단할 것
-- Sorkin/Curtis 원칙 기준으로 서사 동력(Goal/Stakes/Urgency) 진단 포함
-
-출력 형식:
-1. 한 줄 콘셉트
-2. 작품의 강점 5개
-3. 장편화 위험요소 5개
-4. 장르 톤 정의
-5. 주인공 아크 요약 (Intention & Obstacle 압박 테스트 포함)
-6. 적대 구조 요약
-7. 관계 축 요약
-8. 정보/시대/세계관 처리 포인트
-9. 장르적 재미 진단 (필수 요소 충족 여부, 실패 패턴 해당 여부)
-10. 즉시 보강이 필요한 핵심 3개
-
-{_genre_block(genre)}
-
-{locked_block}
-
-[가제] {working_title}
-[장르] {genre}
-[형식] {format_mode}
-[시점] {pov}
-[목표 분량] {target_length}
-[작품 개요] {overview}
-[캐릭터] {characters}
-[줄거리 / 트리트먼트] {synopsis}
-[추가 메모] {notes}
-
-{_style_block(style_dna, style_strength)}""".strip()
-
-
-def build_gap_diagnosis_prompt(working_title,merged_analysis,overview,characters,synopsis,notes,style_dna,locked_block=""):
-    return f"""다음 작품의 부족한 점을 장편소설 기준으로 진단하라.
-
-출력 형식:
-1. 구조적 부족점
-2. 인물의 부족점 (Tactics = Character 기준)
-3. 감정선의 부족점 (Too Wet 위반 여부 포함)
-4. 장르적 부족점 (Rule Pack 기준)
-5. 정보/시대/세계관의 과다 또는 부족
-6. 중반부 붕괴 위험
-7. 엔딩 약화 위험
-8. 독자 심리 6원칙 활용도 진단 (Information Gap/Dramatic Irony 등)
-9. 가장 먼저 보강해야 할 5개 항목과 구체적 대안
-
-{locked_block}
-
-[가제] {working_title}
-[통합 분석] {merged_analysis}
-[작품 개요] {overview}
-[캐릭터] {characters}
-[줄거리 / 트리트먼트] {synopsis}
-[추가 메모] {notes}
-[STYLE DNA] {style_dna}""".strip()
-
-
-def build_story_reinforcement_prompt(segment_name,working_title,genre,overview,characters,synopsis,notes,merged_analysis,gap_diagnosis,style_dna,locked_block=""):
-    sr = {"기":"세계 진입, 주인공 소개, 결핍/욕망 제시, 발화 사건, 되돌릴 수 없는 선택","승":"상황 확장, 관계 심화, 첫 성공과 첫 대가, 판 확대, 적대 구조 선명화","전":"중반 반전, 배신/상실/균열, 추락과 재정렬, 진실 접근, 결전 압축","결":"결전 준비, 클라이맥스, 감정 회수, 본편 마무리"}
-    return f"""다음 작품의 '{segment_name}' 구간만 보강하라.
-
-구간 기능: {sr.get(segment_name,"")}
-
-요구사항:
-- 장르 Rule Pack의 Hook/Punch 패턴을 구간 내 핵심 장면에 반영할 것
-- 독자 심리 원칙(Dramatic Irony, Information Gap, Delayed Gratification)을 구간 설계에 활용할 것
-- Curtis 감정 연쇄: 이 구간의 마지막 감정이 다음 구간의 첫 전제가 되도록 설계할 것
-- 배신 구조: 이 구간에서 동맹/적대 관계의 변화를 설계할 것
-
-{BETRAYAL_ARCHITECTURE_BLOCK}
-
-출력 형식:
-1. 구간 역할
-2. 핵심 사건 흐름
-3. 인물/관계 변화 (배신 구조 포함: 이 구간에서 신뢰가 쌓이는가? 균열이 시작되는가?)
-4. 감정 흐름 (감정 연쇄 포함)
-5. 반드시 살아야 할 장면 3~5개 (각 장면에 Hook/Punch + 독자 심리 원칙 태그)
-6. 약한 부분 보강 포인트
-7. 반전 배치 (이 구간에 필요한 Twist 레벨과 위치)
-8. 다음 구간으로 넘기는 연결점 (Zeigarnik Effect 활용)
-
-{_genre_block(genre)}
-
-{locked_block}
-
-[가제] {working_title}
-[장르] {genre}
-[작품 개요] {overview}
-[캐릭터] {characters}
-[줄거리 / 트리트먼트] {synopsis}
-[추가 메모] {notes}
-[통합 분석] {merged_analysis}
-[부족한 점 진단] {gap_diagnosis}
-[STYLE DNA] {style_dna}""".strip()
-
-
-def build_unit_blueprint_prompt(group_key,working_title,genre,format_mode,pov,overview,characters,story_reinforcement_merged,synopsis,notes,style_dna,locked_block="",profession_text="",period_keys=None):
-    """Unit 설계 프롬프트 (v3.0)
-    v3.0 추가: POV Discipline / BJND 4축 자기검증 / Reader Retention Curve /
-             Profession Pack / Period Pack / Chapter Signature / Sub-genre OVERRIDE
-    """
-    gm = {"01-02":"기 구간 초반. 오프닝, 세계 진입, 발화 사건","03-04":"기에서 승으로. 되돌릴 수 없는 선택, 상황 확장","05-06":"승 구간 심화. 관계 확장, 첫 대가, 판 확대","07-08":"전 구간 진입. 중반 반전, 균열, 배신, 상실","09-10":"전에서 결로. 추락, 재정렬, 결전 준비","11-12":"결 구간. 클라이맥스, 정서 회수, 본편 마무리"}
-
-    # v3.0 M8 POV Discipline
-    pov_block = build_pov_discipline_block(pov)
-
-    # v3.0 M5 Profession Pack
-    profession_block = ""
-    if profession_text and _PROFESSION_PACK_AVAILABLE:
-        profession_block = build_profession_block(profession_text)
-
-    # v3.0 M9 Period Pack
-    period_block = ""
-    if _PERIOD_PACK_AVAILABLE:
-        if period_keys:
-            period_block = build_period_block(locked_text="", period_keys=period_keys, max_periods=2)
-        elif locked_block:
-            period_block = build_period_block_auto(locked_block)
-
-    # v3.0 M10 Profession × Period 교차검증 (둘 다 있을 때만)
-    cross_check_block = ""
-    if profession_block and period_block:
-        cross_check_block = f"\n{PROFESSION_PERIOD_CROSS_CHECK_BLOCK}\n"
-
-    # v3.0 M4 Sub-genre OVERRIDE
-    subgenre_override = get_subgenre_override(genre)
-    subgenre_block = f"\n{subgenre_override}\n" if subgenre_override else ""
-
-    return f"""다음 작품의 UNIT {group_key} 설계를 작성하라. (Novel Engine v3.0)
-
-구간 의미: {gm.get(group_key,"")}
-
-{pov_block}
-
-요구사항:
-- 각 Unit의 시작(Hook)과 끝(Punch)을 장르 Rule Pack 기준으로 설계할 것
-- 독자 심리 원칙을 각 Unit에 최소 1개 이상 활용할 것
-- Unit 12가 포함된 경우 반드시 본편을 마무리하도록 설계할 것
-- ★ 각 Unit 설계 후 BJND 4축 자기채점을 반드시 수행할 것 (v3.0 M3) ★
-
-출력 형식:
-[UNIT XX]
-- 제목:
-- 서사 기능:
-- POV 인물 (3인칭 제한·듀얼·다중 시점일 때만 명시):
-- Unit 구조 유형 (아래 6유형 중 선택. 직전 Unit과 반드시 다른 유형):
-  [INV] 조사/발견형 — 단서 수집, 정보 조각, 진실에 접근
-  [CON] 대결/충돌형 — 직접 대면, 언쟁, 갈등 폭발
-  [REV] 반전/배신형 — 예상 뒤집기, 동맹 붕괴, 새로운 진실
-  [EMO] 감정/관계형 — 관계 변화, 고백, 결별, 감정 씬
-  [ACT] 행동/추격형 — 물리적 행동, 시간 압박, 도주, 구출
-  [SIL] 정적/결심형 — 침묵, 내면, 결심의 순간, 폭풍 전 고요
-  ★ 같은 유형이 2회 연속이면 안 된다. 특히 2막(Unit 5~8)에서 [INV]만 반복되면 실패. ★
-- 핵심 사건:
-- 감정 변화:
-- Hook (장면 시작):
-- Punch (장면 종결):
-- Opening Signature (이 Unit의 첫 문장 시그니처 — v3.0 M6): 한 문장으로 예시 제시
-- Closing Signature (이 Unit의 마지막 문장 시그니처 — v3.0 M6): 한 문장으로 예시 제시
-- 클리프행어 유형 (C1~C6 중 선택):
-- 반전 (Twist): 이 Unit에 배치되는 반전의 레벨(L1~L5)과 내용. 없으면 "없음".
-- 배신 추적: 이 Unit에서 동맹/적대 관계의 변화. 배신자의 행동이나 복선.
-- 정보 레이어: R(독자)/P(주인공)/V(빌런)이 이 Unit에서 새로 알게 되는 것. 비대칭 유형(I1~I4).
-- Plant/Payoff: 이 Unit에서 심는 Plant (캐릭터/관계/세계관 중 어떤 유형?) / 이 Unit에서 회수하는 Payoff. 없으면 "없음".
-- 빌런 상태: Villain 4 Questions 기준 — 이 Unit에서 적대자가 이기고 있는가? 주인공의 계획을 뒤엎었는가?
-- 독자 심리 원칙:
-
-[BJND 4축 자기채점 — v3.0 M3 필수]
-- NECESSITY: 점수/이유
-- AUTHENTICITY: 점수/이유
-- EMPATHY: 점수/이유
-- POTENCY: 점수/이유
-- 합계 및 판정 (14점 미만 = 재설계)
-
-{READER_RETENTION_CURVE_BLOCK}
-
-{BJND_SELF_VERIFICATION_BLOCK}
-
-{subgenre_block}
-
-{TWIST_MAP_BLOCK}
-
-{BETRAYAL_ARCHITECTURE_BLOCK}
-
-{INFORMATION_LAYER_BLOCK}
-
-{PLANTING_PAYOFF_BLOCK}
-
-{_genre_block(genre)}
-
-{profession_block}
-
-{period_block}
-
-{cross_check_block}
-
-{locked_block}
-
-[가제] {working_title}
-[장르] {genre}
-[형식] {format_mode}
-[시점] {pov}
-[작품 개요] {overview}
-[캐릭터] {characters}
-[줄거리 / 트리트먼트] {synopsis}
-[기승전결 보강본] {story_reinforcement_merged}
-[추가 메모] {notes}
-[STYLE DNA] {style_dna}""".strip()
-
-
-def build_unit_draft_prompt(unit_no,working_title,genre,format_mode,pov,overview,characters,synopsis,notes,story_reinforcement_merged,all_blueprints_text,previous_drafts,style_dna,style_strength,target_length,min_length,locked_block="",profession_text="",period_keys=None,retry_hint=""):
-    """Unit 원고 생성 프롬프트 (v3.0)
-    v3.0 추가:
-      - POV Discipline (M8)
-      - Profession Pack (M5)
-      - Period Pack (M9)
-      - Profession × Period 교차검증 (M10)
-      - BJND Scene Enforcer 재주입 (M1)
-      - retry_hint: 자동 재생성 시 이전 위반 지표를 프롬프트에 주입
-    """
-    if unit_no == 12:
-        fr = "이 Unit은 본편의 마지막이다. 중심 갈등을 종결하고 감정적/플롯적 회수를 수행하라. 마지막 줄에 '끝.' 출력."
-    else:
-        fr = "아직 본편의 마지막이 아니므로 '끝.' 을 출력하지 않는다. 다음 Unit으로 넘어가게 하는 Punch를 남긴다."
-    gk = detect_genre_key(genre)
-    r = GENRE_RULES.get(gk, GENRE_RULES["미지정"])
-    opening_rule = f"\n{CHAPTER_ONE_OPENING_RULE}\n\n{OPENING_MASTERY_BLOCK}\n" if unit_no == 1 else ""
-    genre_override = get_genre_override(genre)
-    genre_override_block = f"\n{genre_override}\n" if genre_override else ""
-
-    # v3.0 M8 POV Discipline
-    pov_block = build_pov_discipline_block(pov)
-    pov_section = f"\n{pov_block}\n" if pov_block else ""
-
-    # v3.0 M5 Profession Pack
-    profession_block = ""
-    if profession_text and _PROFESSION_PACK_AVAILABLE:
-        profession_block = build_profession_block(profession_text)
-    profession_section = f"\n{profession_block}\n" if profession_block else ""
-
-    # v3.0 M9 Period Pack
-    period_block = ""
-    if _PERIOD_PACK_AVAILABLE:
-        if period_keys:
-            period_block = build_period_block(locked_text="", period_keys=period_keys, max_periods=2)
-        elif locked_block:
-            period_block = build_period_block_auto(locked_block)
-    period_section = f"\n{period_block}\n" if period_block else ""
-
-    # v3.0 M10 Profession × Period 교차검증
-    cross_check_section = ""
-    if profession_block and period_block:
-        cross_check_section = f"\n{PROFESSION_PERIOD_CROSS_CHECK_BLOCK}\n"
-
-    # v3.0 M1 자동 재생성 시 위반 지표 주입
-    retry_section = ""
-    if retry_hint:
-        retry_section = f"""
-[★★★ AUTO-REGEN RETRY — 이전 생성본 위반 지표 (v3.0 M1) ★★★]
-이전 생성본에서 아래 항목이 임계치를 초과했다. 이번 생성에서는 반드시 임계치 이하로 작성하라.
-
-{retry_hint}
-
-★ 이 숫자를 지키는 것이 이번 생성의 최우선 목표다. ★
-"""
-
-    # v3.0 Unit Signature 주입 (M6)
-    unit_signature_note = """
-[UNIT SIGNATURE — v3.0 M6]
-이 Unit의 설계안(blueprint)에 "Opening Signature"와 "Closing Signature"가 명시되어 있다면,
-첫 문장과 마지막 문장을 그 시그니처의 결로 작성하라. 시그니처의 이미지·리듬·톤을 반영하되,
-문장 자체를 그대로 복제하지는 마라.
-"""
-
-    return f"""다음 작품의 UNIT {unit_no:02d} 실제 원고를 작성하라. (Novel Engine v3.0)
-
-{retry_section}
-
-{pov_section}
-
-챕터 제목 규칙:
-- 원고의 첫 줄에 반드시 [CHAPTER {unit_no}] — 서브타이틀 형식으로 출력할 것
-{opening_rule}
-{genre_override_block}
-{unit_signature_note}
-
-[장르적 재미 규칙]
-장르적 재미의 본질: {r['genre_fun']}
-Hook 규칙: {r['hook_rule']}
-Punch 규칙: {r['punch_rule']}
-- 이 Unit의 첫 장면은 반드시 Hook 패턴으로 시작할 것
-- 이 Unit의 마지막 장면은 반드시 Punch 패턴으로 끝낼 것
-
-[독자 심리 활용]
-- 이 Unit 안에서 Dramatic Irony 또는 Information Gap을 최소 1회 활용할 것
-- 장면이 깔끔하게 끝나지 않게 Zeigarnik Effect를 적용할 것
-- Too Wet 금지: 감정을 직접 서술하지 말고 행동으로 보여줄 것
-
-{BJND_SCENE_ENFORCER_BLOCK}
-
-{PACING_RULES_BLOCK}
-
-{CLIFFHANGER_RULES_BLOCK}
-
-{INFORMATION_LAYER_BLOCK}
-
-{profession_section}
-
-{period_section}
-
-{cross_check_section}
-
-중요 원칙:
-- 줄거리 요약처럼 쓰지 말고 실제 소설 원고로 쓸 것
-- 최소 4개의 장면 블록 (도입/전개/전환/마감)
-- 감각적 진입, 행동, 대사, 갈등, 감정 변화가 살아 있어야 한다
-- 중요한 대면 장면은 축약하지 말 것
-- 목표 분량 약 {target_length}자, 최소 {min_length}자 이상
-
-[장면 다양성 규칙 — SCENE DIVERSITY]
-★ AI가 반복하는 4대 장면 패턴을 금지한다. ★
-
-1. "전화/메시지 → 정보 전달 → 끊기" 장면은 Unit당 최대 2회.
-   - 3회 이상이면 실패. 정보 전달은 대면, 발견, 관찰, 행동으로도 가능하다.
-   - 전화 대신: 직접 만남, 서류 발견, 뉴스 시청, 누군가의 행동 목격, 이메일/메모 확인.
-
-2. "창밖을 바라보며 생각" 장면은 Unit당 최대 1회.
-   - 2회 이상이면 실패. 인물이 생각할 때 반드시 창밖을 볼 필요 없다.
-   - 대신: 걸으며 생각, 운전하며 생각, 사물을 만지며 생각, 아무것도 안 하며 생각.
-
-3. "엘리베이터/로비/현관" 이동 장면은 Unit당 최대 1회.
-   - 장소 이동을 매번 서술하지 마라. 장면 전환(빈 줄) 한 번이면 충분하다.
-   - "엘리베이터가 1층에 도착했다. 로비를 지나 밖으로 나갔다." 이런 교통 묘사는 불필요.
-
-4. 같은 행동의 반복 금지.
-   - "포크를 내려놓았다"를 한 번 썼으면 다시 쓰지 마라.
-   - "와인을 한 모금 마셨다"를 한 번 썼으면 다시 쓰지 마라.
-   - 같은 Unit 안에서 같은 동작이 2회 등장하면 실패.
-
-[장면 유형 4가지 — 최소 3유형을 사용할 것]
-[A] 대면 장면: 두 인물이 같은 공간에서 대화하고 행동한다. 갈등이 표면에 드러난다.
-[B] 독백/행동 장면: 인물이 혼자서 행동하거나 생각한다. 내면이 드러난다.
-[BR] 전환 장면: 시간/공간이 점프한다. 빈 줄 후 새로운 감각으로 진입한다.
-[CUT] 컷어웨이: 다른 인물/장소로 시점이 잠시 이동한다. 독자에게 정보 비대칭을 준다.
-- Unit 하나에 [A]만 4개, 또는 [B]만 4개이면 단조롭다. 최소 3가지 유형을 섞어라.
-
-[Unit 구조 유형 — 직전 Unit과 다른 유형으로]
-이 Unit의 극적 기능이 직전 Unit과 같으면 독자가 지루해한다.
-[INV] 조사/발견형 [CON] 대결/충돌형 [REV] 반전/배신형 [EMO] 감정/관계형 [ACT] 행동/추격형 [SIL] 정적/결심형
-★ 이전 Unit 원고를 확인하고, 이전 Unit과 다른 구조 유형으로 써라. ★
-
-[Planting & Payoff 체크]
-- Unit 설계에 Plant/Payoff 지시가 있으면 반드시 반영하라.
-- Plant는 자연스럽게. 독자가 눈치채면 안 된다. 소품, 대사, 습관으로 심어라.
-- Payoff는 새로운 의미로. 심었던 것이 돌아올 때 의미가 바뀌어야 한다.
-- 서문이나 메타 설명 없이 바로 원고 본문부터 시작할 것
-
-추가 규칙: {fr}
-
-{locked_block}
-
-[가제] {working_title}
-[장르] {genre}
-[형식] {format_mode}
-[시점] {pov}
-[작품 개요] {overview}
-[캐릭터] {characters}
-[줄거리 / 트리트먼트] {synopsis}
-[추가 메모] {notes}
-[기승전결 보강본] {story_reinforcement_merged}
-[전체 Unit 설계] {all_blueprints_text}
-[이전까지 작성된 Unit 원고] {previous_drafts or "이전 원고 없음"}
-★ 이전 원고를 반드시 확인하고, 이전 Unit에서 이미 사용한 장면/행동/상황을 이번 Unit에서 반복하지 마라.
-  - 이전에 전화 장면이 2회 이상 있었으면 이번 Unit은 전화 대신 대면/발견/관찰을 써라.
-  - 이전에 "창밖을 바라보며 생각" 장면이 있었으면 이번 Unit은 다른 방식으로 인물의 내면을 써라.
-  - 이전 Unit의 마지막 장면과 이번 Unit의 첫 장면이 같은 유형이면 안 된다. ★
-
-{_style_block(style_dna, style_strength)}""".strip()
-
-
-def build_expand_incomplete_unit_prompt(unit_no,current_text,target_length,min_length):
-    fr = "마지막 줄에 '끝.' 출력." if unit_no in (12,13) else "'끝.' 붙이지 않는다."
-    return f"""다음 UNIT 원고는 분량이 부족하거나 끝맺음이 미완성이다.
-기존 텍스트를 반복하지 말고 바로 이어서 장면을 확장하고 마무리를 완성하라.
-
-요구사항:
-- 톤, 시점, 흐름 유지. 요약문 건너뛰기 금지.
-- 전체 결과가 최소 {min_length}자 이상, 가능하면 {target_length}자 내외
-- 서문 없이 바로 이어서 쓸 것
-- {fr}
-
-[현재 원고]
-{current_text}""".strip()
-
-
-def build_unit_rewrite_prompt(unit_no,rewrite_mode,source_text,style_dna,target_length,min_length):
-    er = "마지막 줄에 '끝.' 유지." if unit_no in (12,13) else "'끝.' 붙이지 않는다."
-    return f"""다음 UNIT 원고를 '{rewrite_mode}' 방향으로 다시 써라.
-
-요구사항:
-- 플롯을 함부로 바꾸지 말고 문장, 장면 밀도, 감정 전달, 후킹, 가독성을 개선할 것
-- 원본보다 짧아지면 실패. 분량을 유지하거나 늘려라.
-- 최소 {min_length}자 이상, 가능하면 {target_length}자 내외
-- 서문 없이 바로 원고 본문부터 출력
-- {er}
-
-[STYLE DNA]
-{style_dna}
-
-[원고]
-{source_text}""".strip()
-
-
-def build_epilogue_prompt(working_title,genre,overview,characters,synopsis,story_reinforcement_merged,all_blueprints_text,all_drafts_text,style_dna,locked_block=""):
-    return f"""다음 작품의 UNIT 13 에필로그를 작성하라.
-
-챕터 제목: 첫 줄에 [CHAPTER 13] — 에필로그 형식으로 출력할 것
-
-요구사항:
-- 약 2000~3000자 내외의 정서적 마무리
-- 본편을 다시 뒤집지 말 것
-- 후일담, 여운, 상징 회수, 관계의 잔향 중심
-- 서문 없이 바로 에필로그 본문부터 시작
-- 마지막 줄에 '끝.' 출력
-
-{locked_block}
-
-[가제] {working_title}
-[장르] {genre}
-[작품 개요] {overview}
-[캐릭터] {characters}
-[줄거리 / 트리트먼트] {synopsis}
-[기승전결 보강본] {story_reinforcement_merged}
-[전체 Unit 설계] {all_blueprints_text}
-[본편 원고] {all_drafts_text}
-[STYLE DNA] {style_dna}""".strip()
-
-
-def build_title_review_prompt(current_title,overview,synopsis,story_reinforcement_merged,all_blueprints_text,all_drafts_text,style_dna):
-    return f"""현재 가제를 검토하고 원고 기반 제목 대안을 제안하라.
-
-출력 형식:
-1. 현재 가제 유지 여부
-2. 유지 또는 비추천 이유
-3. 현재 가제를 살린 보강안 5개
-4. 새 대안 제목 10개
-5. 영상화형 제목 5개
-6. 문학/정서형 제목 5개
-7. 가장 추천하는 최종 후보 3개와 이유
-
-[현재 가제] {current_title}
-[작품 개요] {overview}
-[줄거리 / 트리트먼트] {synopsis}
-[기승전결 보강본] {story_reinforcement_merged}
-[전체 Unit 설계] {all_blueprints_text}
-[생성 원고] {all_drafts_text}
-[STYLE DNA] {style_dna}""".strip()
-
-
-# =================================================================
-# [10] CHAPTER 1 다단계 생성 — 3 STAGE SYSTEM
-# =================================================================
-
-def build_ch1_stage_a_prompt(working_title,genre,format_mode,pov,overview,characters,synopsis,notes,style_dna,style_strength,locked_block="",profession_text="",period_keys=None):
-    """Stage A: PEAK — 오프닝 장면 (v3.0: OPENING MASTERY + Profession + Period + POV)"""
-    gk = detect_genre_key(genre)
-    r = GENRE_RULES.get(gk, GENRE_RULES["미지정"])
-
-    pov_block = build_pov_discipline_block(pov)
-    pov_section = f"\n{pov_block}\n" if pov_block else ""
-
-    profession_block = ""
-    if profession_text and _PROFESSION_PACK_AVAILABLE:
-        profession_block = build_profession_block(profession_text)
-    profession_section = f"\n{profession_block}\n" if profession_block else ""
-
-    period_block = ""
-    if _PERIOD_PACK_AVAILABLE:
-        if period_keys:
-            period_block = build_period_block(locked_text="", period_keys=period_keys, max_periods=2)
-        elif locked_block:
-            period_block = build_period_block_auto(locked_block)
-    period_section = f"\n{period_block}\n" if period_block else ""
-
-    cross_check_section = ""
-    if profession_block and period_block:
-        cross_check_section = f"\n{PROFESSION_PERIOD_CROSS_CHECK_BLOCK}\n"
-
-    return f"""다음 작품의 Chapter 1 오프닝 장면(Stage A: PEAK)만 작성하라. (Novel Engine v3.0)
-
-이것은 Chapter 1의 첫 부분이다. 전체 챕터가 아니라 오프닝 장면만 쓴다.
-
-{OPENING_MASTERY_BLOCK}
-
-{CHAPTER_ONE_OPENING_RULE}
-
-{pov_section}
-
-[이 단계의 목표]
-- 주인공이 정상(PEAK)에 있는 상태를 보여준다 (★ 오프닝 도파민, 발단 사건 아님 ★)
-- 독자가 이 인물에게 매혹되어야 한다
-- 음식을 만들거나 다루는 행위로 시작한다
-- 요리 방식이 인물의 성격/능력/통제력을 정의한다
-- 감각 채널 3개 이상을 연다
-- 가진 것을 구체적으로 보여준다: 능력, 성취, 관계, 쾌락, 공간
-
-[분량]
-- 약 2000~2500자
-- 서문이나 메타 설명 없이 바로 소설 본문부터 시작할 것
-
-[금지]
-- 이 단계에서 균열(LOSS)을 시작하지 마라. 그건 Stage C에서 한다.
-- 인물 외형 묘사를 블록으로 넣지 마라. 행동 속에 녹여라.
-- 배경 설명을 직접 서술하지 마라. 장면 속에 녹여라.
-- ★ 전화/메시지는 Stage A에서 최대 1회. 2번 이상 전화가 오면 실패. ★
-- ★ 금융 용어, 수익률, 블룸버그 터미널 숫자를 나열하지 마라. 인물의 행동으로 능력을 보여줘라. ★
-- ★ Stage A는 오직 한 장소, 한 시간대에서만 진행한다. 장소 이동 금지. ★
-
-[장르적 재미]
-{r['genre_fun']}
-Hook 규칙: {r['hook_rule']}
-
-{BJND_SCENE_ENFORCER_BLOCK}
-
-{PACING_RULES_BLOCK}
-
-{profession_section}
-
-{period_section}
-
-{cross_check_section}
-
-{locked_block}
-
-[가제] {working_title}
-[장르] {genre}
-[형식] {format_mode}
-[시점] {pov}
-[작품 개요] {overview}
-[캐릭터] {characters}
-[줄거리 / 트리트먼트] {synopsis}
-[추가 메모] {notes}
-
-{_style_block(style_dna, style_strength)}""".strip()
-
-
-def build_ch1_stage_b_prompt(working_title,genre,format_mode,pov,overview,characters,synopsis,notes,style_dna,style_strength,stage_a_text="",locked_block="",profession_text="",period_keys=None):
-    """Stage B: WORLD — 전개 (v3.0: Profession + Period + POV)"""
-    gk = detect_genre_key(genre)
-    r = GENRE_RULES.get(gk, GENRE_RULES["미지정"])
-
-    pov_block = build_pov_discipline_block(pov)
-    pov_section = f"\n{pov_block}\n" if pov_block else ""
-
-    profession_block = ""
-    if profession_text and _PROFESSION_PACK_AVAILABLE:
-        profession_block = build_profession_block(profession_text)
-    profession_section = f"\n{profession_block}\n" if profession_block else ""
-
-    period_block = ""
-    if _PERIOD_PACK_AVAILABLE:
-        if period_keys:
-            period_block = build_period_block(locked_text="", period_keys=period_keys, max_periods=2)
-        elif locked_block:
-            period_block = build_period_block_auto(locked_block)
-    period_section = f"\n{period_block}\n" if period_block else ""
-
-    return f"""다음은 Chapter 1의 Stage A(오프닝 장면)이다. 이어서 Stage B(전개)만 작성하라. (Novel Engine v3.0)
-
-[Stage A 원고 — 이미 작성됨. 이 뒤에 이어서 쓴다.]
-{stage_a_text}
-
-{pov_section}
-
-[이 단계의 목표]
-- Stage A에서 보여준 인물의 PEAK를 더 깊이 전개한다
-- 세계관, 권력 구조, 핵심 관계를 대화와 행동 속에 녹여서 보여준다
-- 설명이 아니라 장면으로: 배경 정보는 갈등, 대화, 행동 안에 배치
-- 주인공의 능력, 지위, 관계가 구체적 장면으로 드러나야 한다
-- 독자가 이 세계와 인물에 완전히 몰입하게 만든다
-- 필요하면 핵심 조연/적대자를 등장시키거나 암시한다
-
-[분량]
-- 약 2500~3000자
-- Stage A에서 바로 이어지는 톤과 시점을 유지할 것
-- Stage A 텍스트를 반복하지 말고 바로 이어서 쓸 것
-
-[금지]
-- ★ 회상(flashback) 절대 금지. 어린 시절 회상, "~했었다"로 시작하는 과거 사건 설명 블록 전부 금지. Chapter 1은 현재 시간대만 다룬다 (단, 문체는 소설 과거형으로 쓴다). ★
-- ★ 반복 금지: Stage A에서 이미 등장한 행동(요리, 전화 받기, 창밖 보기 등)을 다시 쓰지 마라. Stage A의 마지막 문장 직후부터 이어서 쓴다. ★
-- ★ 전화/메시지는 Stage B에서 최대 1회. Stage A에서 이미 전화가 있었으면 Stage B에서는 전화 금지. ★
-- 정보를 대사로 운반하지 마라 (설명용 대사 금지)
-- 이 단계에서 균열(LOSS)을 시작하지 마라
-- 인물의 과거 정보가 필요하면 현재 행동/대사/사물 속에 1줄로 암시할 것
-
-[장르적 재미]
-{r['genre_fun']}
-
-{BJND_SCENE_ENFORCER_BLOCK}
-
-{PACING_RULES_BLOCK}
-
-{profession_section}
-
-{period_section}
-
-{locked_block}
-
-[가제] {working_title}
-[장르] {genre}
-[형식] {format_mode}
-[시점] {pov}
-[작품 개요] {overview}
-[캐릭터] {characters}
-[줄거리 / 트리트먼트] {synopsis}
-[추가 메모] {notes}
-
-{_style_block(style_dna, style_strength)}""".strip()
-
-
-def build_ch1_stage_c_prompt(working_title,genre,format_mode,pov,overview,characters,synopsis,notes,style_dna,style_strength,stage_a_text="",stage_b_text="",locked_block="",profession_text="",period_keys=None):
-    """Stage C: LOSS — 균열 (v3.0: Profession + Period + POV)"""
-    gk = detect_genre_key(genre)
-    r = GENRE_RULES.get(gk, GENRE_RULES["미지정"])
-
-    pov_block = build_pov_discipline_block(pov)
-    pov_section = f"\n{pov_block}\n" if pov_block else ""
-
-    profession_block = ""
-    if profession_text and _PROFESSION_PACK_AVAILABLE:
-        profession_block = build_profession_block(profession_text)
-    profession_section = f"\n{profession_block}\n" if profession_block else ""
-
-    period_block = ""
-    if _PERIOD_PACK_AVAILABLE:
-        if period_keys:
-            period_block = build_period_block(locked_text="", period_keys=period_keys, max_periods=2)
-        elif locked_block:
-            period_block = build_period_block_auto(locked_block)
-    period_section = f"\n{period_block}\n" if period_block else ""
-
-    return f"""다음은 Chapter 1의 Stage A(오프닝)과 Stage B(전개)이다. 이어서 Stage C(균열)만 작성하라. (Novel Engine v3.0)
-이것이 Chapter 1의 마지막 부분이다.
-
-[Stage A + B 원고 — 이미 작성됨. 이 뒤에 이어서 쓴다.]
-{stage_a_text}
-
-{stage_b_text}
-
-{pov_section}
-
-[이 단계의 목표]
-- PEAK가 무너지는 순간을 쓴다. LOSS의 시작.
-- ★ 이것이 발단 사건(inciting incident)이다 — Stage A의 오프닝 도파민과는 다르다. 여기서 주인공의 여정이 시작된다. ★
-- 가진 것이 위협받는 구체적 신호: 전화, 뉴스, 발견, 방문자, 실수
-- 상실은 구체적이어야 한다: 돈, 지위, 안전, 관계, 자유 중 하나 이상이 직접적으로 위협
-- PEAK에서 보여준 것의 이면에 숨은 결핍(LACK)을 암시한다 (완전히 드러낼 필요는 없다)
-- Chapter 1의 마지막 줄은 반드시 클리프행어로 끝난다
-
-[클리프행어]
-{CLIFFHANGER_RULES_BLOCK}
-- 이 Chapter는 C1(위협), C2(질문), C4(반전), C5(도착) 중 하나로 끝나야 한다
-- "그리고 밤이 깊어갔다" 같은 분위기 마무리 절대 금지
-
-[분량]
-- 약 1500~2000자
-- Stage B에서 바로 이어지는 톤과 시점을 유지할 것
-- Stage A, B 텍스트를 반복하지 말고 바로 이어서 쓸 것
-
-[금지]
-- ★ 반복 금지: Stage A와 B에서 이미 등장한 행동을 다시 쓰지 마라. ★
-  - Stage A/B에서 이미 전화를 받았으면 Stage C에서 또 전화를 받지 마라.
-  - Stage A/B에서 이미 창밖을 봤으면 Stage C에서 같은 묘사를 반복하지 마라.
-  - Stage A/B에서 이미 엘리베이터를 탔으면 Stage C에서 다시 타지 마라.
-- ★ 균열의 신호는 1개면 충분하다. 전화 + 메시지 + 방문자가 동시에 오면 실패. ★
-- 균열이 시작된 뒤 바로 해결하지 마라. 질문만 열어라.
-- '끝.'을 붙이지 마라. Chapter 1은 본편의 마지막이 아니다.
-
-[정보 레이어]
-{INFORMATION_LAYER_BLOCK}
-- 이 Stage에서 독자에게 공개되는 핵심 정보는 최대 1개
-- 동시에 새 질문을 최소 1개 열어야 한다
-
-[장르적 재미]
-{r['genre_fun']}
-Punch 규칙: {r['punch_rule']}
-
-{BJND_SCENE_ENFORCER_BLOCK}
-
-{profession_section}
-
-{period_section}
-
-{locked_block}
-
-[가제] {working_title}
-[장르] {genre}
-[형식] {format_mode}
-[시점] {pov}
-[작품 개요] {overview}
-[캐릭터] {characters}
-[줄거리 / 트리트먼트] {synopsis}
-[추가 메모] {notes}
-
-{_style_block(style_dna, style_strength)}""".strip()
-
-
-# =================================================================
-# [9] v3.0 VERSION INFO
-# =================================================================
-NOVEL_ENGINE_VERSION = "v3.0"
-NOVEL_ENGINE_BUILD_DATE = "2026-04-24"
-NOVEL_ENGINE_VERSION_TAG = "v3.0 / 2026-04-24 / BJND Enforcer + OPENING MASTERY + Profession + Period"
-
-def get_novel_engine_version_info() -> str:
-    """Novel Engine v3.0 메타 정보."""
-    profession_status = "OK" if _PROFESSION_PACK_AVAILABLE else "미로드"
-    period_status = "OK" if _PERIOD_PACK_AVAILABLE else "미로드"
-    return (
-        f"Novel Engine {NOVEL_ENGINE_VERSION} "
-        f"(Build {NOVEL_ENGINE_BUILD_DATE}) — "
-        f"Profession Pack: {profession_status} / Period Pack: {period_status}"
+for idx, (label, group_key) in enumerate(buttons):
+    target_col = bp_cols_top[idx] if idx < 3 else bp_cols_bottom[idx - 3]
+    with target_col:
+        if st.button(label, use_container_width=True):
+            build_blueprint(group_key)
+
+for group_key in ["01-02", "03-04", "05-06", "07-08", "09-10", "11-12"]:
+    if st.session_state["unit_blueprints"].get(group_key):
+        with st.expander(f"UNIT {group_key} 설계 보기", expanded=False):
+            st.markdown(st.session_state["unit_blueprints"][group_key])
+
+all_blueprints_text = gather_blueprints_text()
+
+# ─────────────────────────────────────
+# STEP 5
+# ─────────────────────────────────────
+st.markdown('<div class="section-header">✍️ STEP 5 · Unit 원고 생성 / 다시 쓰기</div>', unsafe_allow_html=True)
+
+unit_options = [f"{i:02d}" for i in range(1, 13)] + ["13"]
+selected_unit = st.selectbox(
+    "작업할 Unit 선택",
+    unit_options,
+    format_func=lambda x: "UNIT 13 · 에필로그" if x == "13" else f"UNIT {x}",
+)
+
+# ─── Chapter 1 다단계 생성 시스템 ───
+if selected_unit == "01":
+    st.markdown(
+        '<div class="callout" style="border-left-color:var(--y)">'
+        '<b>Chapter 1 다단계 생성</b> — 오프닝은 소설의 얼굴입니다. 3단계로 나눠서 각 단계를 확인하고 승인한 뒤 다음 단계로 넘어갑니다.'
+        '<br>Stage A: PEAK (정상) → Stage B: WORLD (전개) → Stage C: LOSS (균열)'
+        '</div>',
+        unsafe_allow_html=True,
     )
+
+    ch1_a, ch1_b, ch1_c = st.columns(3)
+
+    with ch1_a:
+        st.markdown("**Stage A · PEAK**")
+        st.markdown('<div class="small-meta">오프닝 장면 · 음식 시그니처 · 인물 정의 · ~2000자</div>', unsafe_allow_html=True)
+        if st.button("Stage A 생성", type="primary", use_container_width=True, key="ch1_a_btn"):
+            def _job():
+                prompt = build_ch1_stage_a_prompt(
+                    working_title=working_title, genre=genre, format_mode=format_mode,
+                    pov=pov, overview=overview, characters=characters,
+                    synopsis=synopsis, notes=notes,
+                    style_dna=st.session_state["style_dna"], style_strength=style_strength,
+                    locked_block=locked_block,
+                    # v3.0 신규
+                    profession_text=profession_text_combined,
+                    period_keys=active_period_keys,
+                )
+                return llm_call(prompt, max_tokens=MAX_TOKENS_MID, use_opus=True)
+            result = run_with_status("Stage A: PEAK 오프닝을 생성 중입니다...", "Stage A 생성 완료.", _job)
+            if result is not None:
+                st.session_state["ch1_stage_a"] = result
+
+    with ch1_b:
+        st.markdown("**Stage B · WORLD**")
+        st.markdown('<div class="small-meta">세계관 · 관계 · 권력 구조를 장면 안에 · ~2500자</div>', unsafe_allow_html=True)
+        has_a = bool(st.session_state["ch1_stage_a"].strip())
+        if st.button("Stage B 생성", use_container_width=True, disabled=not has_a, key="ch1_b_btn"):
+            def _job():
+                prompt = build_ch1_stage_b_prompt(
+                    working_title=working_title, genre=genre, format_mode=format_mode,
+                    pov=pov, overview=overview, characters=characters,
+                    synopsis=synopsis, notes=notes,
+                    style_dna=st.session_state["style_dna"], style_strength=style_strength,
+                    stage_a_text=st.session_state["ch1_stage_a"],
+                    locked_block=locked_block,
+                    # v3.0 신규
+                    profession_text=profession_text_combined,
+                    period_keys=active_period_keys,
+                )
+                return llm_call(prompt, max_tokens=MAX_TOKENS_MID, use_opus=True)
+            result = run_with_status("Stage B: WORLD 전개를 생성 중입니다...", "Stage B 생성 완료.", _job)
+            if result is not None:
+                st.session_state["ch1_stage_b"] = result
+
+    with ch1_c:
+        st.markdown("**Stage C · LOSS**")
+        st.markdown('<div class="small-meta">균열 · 상실의 신호 · 클리프행어 · ~1500자</div>', unsafe_allow_html=True)
+        has_b = bool(st.session_state["ch1_stage_b"].strip())
+        if st.button("Stage C 생성", use_container_width=True, disabled=not has_b, key="ch1_c_btn"):
+            def _job():
+                prompt = build_ch1_stage_c_prompt(
+                    working_title=working_title, genre=genre, format_mode=format_mode,
+                    pov=pov, overview=overview, characters=characters,
+                    synopsis=synopsis, notes=notes,
+                    style_dna=st.session_state["style_dna"], style_strength=style_strength,
+                    stage_a_text=st.session_state["ch1_stage_a"],
+                    stage_b_text=st.session_state["ch1_stage_b"],
+                    locked_block=locked_block,
+                    # v3.0 신규
+                    profession_text=profession_text_combined,
+                    period_keys=active_period_keys,
+                )
+                return llm_call(prompt, max_tokens=MAX_TOKENS_MID, use_opus=True)
+            result = run_with_status("Stage C: LOSS 균열을 생성 중입니다...", "Stage C 생성 완료.", _job)
+            if result is not None:
+                st.session_state["ch1_stage_c"] = result
+
+    # 각 Stage 미리보기
+    for stage_key, stage_label in [("ch1_stage_a", "Stage A · PEAK"), ("ch1_stage_b", "Stage B · WORLD"), ("ch1_stage_c", "Stage C · LOSS")]:
+        stage_text = st.session_state.get(stage_key, "")
+        if stage_text.strip():
+            with st.expander(f"{stage_label} 보기", expanded=True):
+                st.text_area(stage_label, value=stage_text, height=300, label_visibility="collapsed", key=f"preview_{stage_key}")
+
+    # 3단계 완성 시 합치기 버튼
+    all_stages_done = all(st.session_state.get(k, "").strip() for k in ["ch1_stage_a", "ch1_stage_b", "ch1_stage_c"])
+    if all_stages_done:
+        st.markdown("---")
+        if st.button("✅ Chapter 1 확정 — 3단계를 합쳐서 UNIT 01로 저장", type="primary", use_container_width=True, key="ch1_merge_btn"):
+            merged = (
+                st.session_state["ch1_stage_a"].strip()
+                + "\n\n"
+                + st.session_state["ch1_stage_b"].strip()
+                + "\n\n"
+                + st.session_state["ch1_stage_c"].strip()
+            )
+            # 챕터 제목 파싱
+            ch_title, ch_body = parse_chapter_title(merged)
+            if ch_title:
+                st.session_state["unit_drafts"]["01"] = ch_body
+                st.session_state["chapter_titles"]["01"] = ch_title
+            else:
+                st.session_state["unit_drafts"]["01"] = merged
+            set_status("Chapter 1이 확정되었습니다. UNIT 01로 저장 완료.", "success")
+            # 품질 자동 체크
+            final_text = ch_body if ch_title else merged
+            qr = analyze_unit_quality(final_text)
+            st.session_state["quality_report"] = qr
+            # Unit 요약 자동 생성
+            summary = generate_unit_summary(1, final_text)
+            if summary:
+                if "unit_summaries" not in st.session_state:
+                    st.session_state["unit_summaries"] = {}
+                st.session_state["unit_summaries"]["01"] = summary
+            # 캐릭터 등장 추적
+            track_characters("01", final_text)
+
+# ─── 일반 Unit 생성 (Unit 02~13) ───
+else:
+    draft_col1, draft_col2, draft_col3 = st.columns([1, 1, 1])
+
+    with draft_col1:
+        if st.button("Unit 원고 생성", type="primary", use_container_width=True):
+            unit_no = int(selected_unit)
+
+            if unit_no == 13:
+                def _job():
+                    prompt = build_epilogue_prompt(
+                        working_title=working_title,
+                        genre=genre,
+                        overview=overview,
+                        characters=characters,
+                        synopsis=synopsis,
+                        story_reinforcement_merged=story_merged_text,
+                        all_blueprints_text=all_blueprints_text,
+                        all_drafts_text=gather_recent_drafts(13, window=3),
+                        style_dna=st.session_state["style_dna"],
+                        locked_block=locked_block,
+                    )
+                    return generate_or_expand_unit(13, prompt)
+
+                result = run_with_status(
+                    "UNIT 13 에필로그를 생성 중입니다...",
+                    "UNIT 13 에필로그 생성이 완료되었습니다.",
+                    _job,
+                )
+                if result is not None:
+                    ch_title, ch_body = parse_chapter_title(result)
+                    st.session_state["unit_drafts"][selected_unit] = ch_body if ch_title else result
+                    if ch_title:
+                        st.session_state["chapter_titles"][selected_unit] = ch_title
+            else:
+                def _job():
+                    # v3.0 M1: 자동 재생성 로직
+                    # 1차 생성
+                    prompt = build_unit_draft_prompt(
+                        unit_no=unit_no,
+                        working_title=working_title,
+                        genre=genre,
+                        format_mode=format_mode,
+                        pov=pov,
+                        overview=overview,
+                        characters=characters,
+                        synopsis=synopsis,
+                        notes=notes,
+                        story_reinforcement_merged=story_merged_text,
+                        all_blueprints_text=all_blueprints_text,
+                        previous_drafts=gather_recent_drafts(unit_no),
+                        style_dna=st.session_state["style_dna"],
+                        style_strength=style_strength,
+                        target_length=UNIT_TARGET_LENGTHS.get(unit_no, 8000),
+                        min_length=UNIT_MIN_LENGTHS.get(unit_no, 6000),
+                        locked_block=locked_block,
+                        # v3.0 신규
+                        profession_text=profession_text_combined,
+                        period_keys=active_period_keys,
+                        retry_hint="",
+                    )
+                    first_result = generate_or_expand_unit(unit_no, prompt)
+
+                    # v3.0 M1: 1차 결과 BJND 검증
+                    if first_result:
+                        check_body = parse_chapter_title(first_result)[1] or first_result
+                        qr_first = analyze_unit_quality(check_body)
+
+                        # 재생성 트리거 조건 확인
+                        if qr_first.get("should_regenerate") and AUTO_REGEN_MAX_RETRIES > 0:
+                            st.info(
+                                f"⚡ BJND Scene Enforcer 발동: 임계치 초과 감지. "
+                                f"자동 재생성 시도 중... "
+                                f"(위반: {', '.join(qr_first.get('violations', {}).keys())})"
+                            )
+                            # 위반 지표를 힌트로 구성
+                            retry_hint = build_retry_hint(qr_first.get("violations", {}))
+                            # 2차 재생성 (retry_hint 주입)
+                            retry_prompt = build_unit_draft_prompt(
+                                unit_no=unit_no,
+                                working_title=working_title,
+                                genre=genre,
+                                format_mode=format_mode,
+                                pov=pov,
+                                overview=overview,
+                                characters=characters,
+                                synopsis=synopsis,
+                                notes=notes,
+                                story_reinforcement_merged=story_merged_text,
+                                all_blueprints_text=all_blueprints_text,
+                                previous_drafts=gather_recent_drafts(unit_no),
+                                style_dna=st.session_state["style_dna"],
+                                style_strength=style_strength,
+                                target_length=UNIT_TARGET_LENGTHS.get(unit_no, 8000),
+                                min_length=UNIT_MIN_LENGTHS.get(unit_no, 6000),
+                                locked_block=locked_block,
+                                profession_text=profession_text_combined,
+                                period_keys=active_period_keys,
+                                retry_hint=retry_hint,
+                            )
+                            retry_result = generate_or_expand_unit(unit_no, retry_prompt)
+
+                            if retry_result:
+                                # 2차 결과가 더 좋으면 교체, 아니면 1차 유지
+                                retry_body = parse_chapter_title(retry_result)[1] or retry_result
+                                qr_retry = analyze_unit_quality(retry_body)
+                                # severity high 이상 위반 수 비교
+                                def count_serious(qr):
+                                    return sum(
+                                        1 for v in qr.get("violations", {}).values()
+                                        if v.get("severity") in ("critical", "high")
+                                    )
+                                if count_serious(qr_retry) < count_serious(qr_first):
+                                    st.success("✅ 재생성본이 더 좋습니다. 재생성본으로 교체.")
+                                    return retry_result
+                                else:
+                                    st.warning("⚠️ 재생성본이 개선되지 않음. 1차 생성본 유지.")
+                    return first_result
+
+                done_msg = f"UNIT {unit_no:02d} 원고 생성이 완료되었습니다."
+                if unit_no == 12:
+                    done_msg = "UNIT 12 본편 마무리 생성이 완료되었습니다."
+
+                result = run_with_status(
+                    f"UNIT {unit_no:02d} 원고를 생성 중입니다...",
+                    done_msg,
+                    _job,
+                )
+                if result is not None:
+                    ch_title, ch_body = parse_chapter_title(result)
+                    st.session_state["unit_drafts"][selected_unit] = ch_body if ch_title else result
+                    if ch_title:
+                        st.session_state["chapter_titles"][selected_unit] = ch_title
+                    check_text = ch_body if ch_title else result
+                    if is_incomplete_text(check_text, unit_no):
+                        set_status(
+                            f"UNIT {unit_no:02d}는 생성되었지만 아직 짧거나 미완성일 수 있습니다. 다시 쓰기나 재생성을 권장합니다.",
+                            "warning",
+                        )
+                    # 품질 자동 체크
+                    qr = analyze_unit_quality(check_text)
+                    st.session_state["quality_report"] = qr
+                    # Unit 요약 자동 생성
+                    summary = generate_unit_summary(unit_no, check_text)
+                    if summary:
+                        if "unit_summaries" not in st.session_state:
+                            st.session_state["unit_summaries"] = {}
+                        st.session_state["unit_summaries"][selected_unit] = summary
+                    # 캐릭터 등장 추적
+                    track_characters(selected_unit, check_text)
+
+    with draft_col2:
+        rewrite_mode = st.selectbox(
+            "다시 쓰기 모드",
+            ["더 상업적으로", "더 빠르게", "더 감정적으로", "더 차갑게", "더 영상적으로", "더 문학적으로"],
+            index=0,
+        )
+        if st.button("Unit 다시 쓰기", use_container_width=True):
+            source_text = st.session_state["unit_drafts"].get(selected_unit, "")
+            if source_text.strip():
+                def _job():
+                    prompt = build_unit_rewrite_prompt(
+                        unit_no=int(selected_unit),
+                        rewrite_mode=rewrite_mode,
+                        source_text=source_text,
+                        style_dna=st.session_state["style_dna"],
+                        target_length=UNIT_TARGET_LENGTHS.get(int(selected_unit), 8000),
+                        min_length=UNIT_MIN_LENGTHS.get(int(selected_unit), 6000),
+                    )
+                    return generate_or_expand_unit(int(selected_unit), prompt)
+
+                result = run_with_status(
+                    f"UNIT {selected_unit}를 다시 쓰는 중입니다...",
+                    f"UNIT {selected_unit} 다시 쓰기가 완료되었습니다.",
+                    _job,
+                )
+                if result is not None:
+                    st.session_state["unit_drafts"][selected_unit] = result
+
+    with draft_col3:
+        unit_num = int(selected_unit)
+        st.markdown(
+            f'<div class="small-meta">목표 분량 {UNIT_TARGET_LENGTHS.get(unit_num, 8000):,}자 / 최소 {UNIT_MIN_LENGTHS.get(unit_num, 6000):,}자</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            '<div class="small-meta">UNIT 12는 본편을 반드시 마무리합니다. UNIT 13은 선택형 에필로그입니다.</div>',
+            unsafe_allow_html=True,
+        )
+
+current_draft = st.session_state["unit_drafts"].get(selected_unit, "")
+current_ch_title = st.session_state["chapter_titles"].get(selected_unit, "")
+if current_draft:
+    label = current_ch_title if current_ch_title else (
+        "UNIT 13 · 에필로그" if selected_unit == "13" else f"UNIT {selected_unit}"
+    )
+    with st.expander(f"{label} 보기", expanded=True):
+        st.text_area("원고", value=current_draft, height=420, label_visibility="collapsed")
+
+# 품질 리포트 표시
+qr = st.session_state.get("quality_report", {})
+if qr.get("issues") or qr.get("stats"):
+    with st.expander("📊 품질 리포트", expanded=True):
+        stats = qr.get("stats", {})
+        if stats:
+            stat_cols = st.columns(4)
+            stat_items = list(stats.items())
+            for idx, (k, v) in enumerate(stat_items[:4]):
+                with stat_cols[idx]:
+                    st.metric(k, v)
+            if len(stat_items) > 4:
+                stat_cols2 = st.columns(4)
+                for idx, (k, v) in enumerate(stat_items[4:8]):
+                    with stat_cols2[idx]:
+                        st.metric(k, v)
+        issues = qr.get("issues", [])
+        if issues:
+            for issue in issues:
+                st.warning(issue)
+        else:
+            st.success("✅ 주요 품질 문제 없음")
+
+# Unit 요약 표시
+summaries = st.session_state.get("unit_summaries", {})
+filled = {k: v for k, v in summaries.items() if v}
+if filled:
+    with st.expander("📋 Unit 요약 (전체 흐름)", expanded=False):
+        for key in sorted(filled.keys()):
+            st.markdown(f"**UNIT {key}**: {filled[key]}")
+
+# 캐릭터 등장 추적 표시
+char_report = get_character_report()
+if char_report.get("first_appearance"):
+    with st.expander(f"👥 캐릭터 등장 추적 ({char_report.get('total', 0)}명)", expanded=False):
+        fa = char_report["first_appearance"]
+        for name in sorted(fa.keys(), key=lambda x: fa[x]):
+            st.markdown(f"- **{name}** — 첫 등장: UNIT {fa[name]}")
+        warnings = char_report.get("warnings", [])
+        if warnings:
+            st.markdown("---")
+            for w in warnings:
+                st.warning(w)
+
+# ─────────────────────────────────────
+# STEP 6
+# ─────────────────────────────────────
+st.markdown('<div class="section-header">🏷️ STEP 6 · 가제 검토 / 제목 제안</div>', unsafe_allow_html=True)
+
+title_col1, title_col2 = st.columns([1, 1])
+
+with title_col1:
+    if st.button("원고 기반 제목 검토", use_container_width=True):
+        def _job():
+            prompt = build_title_review_prompt(
+                current_title=working_title,
+                overview=overview,
+                synopsis=synopsis,
+                story_reinforcement_merged=story_merged_text,
+                all_blueprints_text=all_blueprints_text,
+                all_drafts_text=gather_all_drafts_text(),
+                style_dna=st.session_state["style_dna"],
+            )
+            return llm_call(prompt, max_tokens=MAX_TOKENS_MID)
+
+        result = run_with_status(
+            "원고를 다시 읽고 제목을 검토 중입니다...",
+            "제목 검토 / 대안 제안이 완료되었습니다.",
+            _job,
+        )
+        if result is not None:
+            st.session_state["title_review"] = result
+
+with title_col2:
+    st.markdown(
+        '<div class="small-meta">가제를 버리는 단계가 아니라, 원고를 읽고 현재 가제가 맞는지 검토하고 대안을 비교하는 단계입니다.</div>',
+        unsafe_allow_html=True,
+    )
+
+if st.session_state["title_review"]:
+    with st.expander("제목 검토 / 대안 보기", expanded=True):
+        st.markdown(st.session_state["title_review"])
+
+# ─────────────────────────────────────
+# STEP 7
+# ─────────────────────────────────────
+st.markdown('<div class="section-header">💾 STEP 7 · 저장 / 내보내기</div>', unsafe_allow_html=True)
+
+safe_title = safe_filename(working_title)
+manuscript = final_manuscript_text(working_title)
+
+current_unit_text = st.session_state["unit_drafts"].get(selected_unit, "").strip()
+current_unit_label = "UNIT_13_에필로그" if selected_unit == "13" else f"UNIT_{selected_unit}"
+
+txt_bytes = export_txt(manuscript) if manuscript.strip() else b""
+docx_bytes = export_docx(working_title or "Novel Draft", manuscript) if manuscript.strip() else b""
+
+unit_txt_bytes = export_txt(current_unit_text) if current_unit_text else b""
+unit_docx_bytes = (
+    export_docx(f"{working_title or 'Novel Draft'} {current_unit_label}", current_unit_text)
+    if current_unit_text
+    else b""
+)
+
+if not manuscript.strip():
+    st.warning("아직 저장할 최종 원고가 없습니다. 먼저 Unit 원고를 생성해 주세요.")
+else:
+    st.info("다운로드 버튼을 누르면 브라우저로 바로 저장됩니다.")
+
+st.markdown("**현재 Unit 저장**")
+u1, u2 = st.columns(2)
+
+with u1:
+    st.download_button(
+        "현재 Unit TXT 저장",
+        data=unit_txt_bytes,
+        file_name=f"{safe_title}_{current_unit_label}.txt",
+        mime="text/plain",
+        use_container_width=True,
+        disabled=not bool(current_unit_text),
+        key=f"download_unit_txt_{selected_unit}",
+    )
+
+with u2:
+    st.download_button(
+        "현재 Unit DOCX 저장",
+        data=unit_docx_bytes,
+        file_name=f"{safe_title}_{current_unit_label}.docx",
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        use_container_width=True,
+        disabled=not bool(current_unit_text),
+        key=f"download_unit_docx_{selected_unit}",
+    )
+
+st.markdown("**최종 원고 저장**")
+exp1, exp2 = st.columns(2)
+
+with exp1:
+    st.download_button(
+        "최종 원고 TXT 저장",
+        data=txt_bytes,
+        file_name=f"{safe_title}_final.txt",
+        mime="text/plain",
+        use_container_width=True,
+        disabled=not bool(manuscript.strip()),
+        key="download_final_txt",
+    )
+
+with exp2:
+    st.download_button(
+        "최종 원고 DOCX 저장",
+        data=docx_bytes,
+        file_name=f"{safe_title}_final.docx",
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        use_container_width=True,
+        disabled=not bool(manuscript.strip()),
+        key="download_final_docx",
+    )
+
+with st.expander("최종 원고 미리보기", expanded=False):
+    st.text_area("최종 원고", value=manuscript, height=420, label_visibility="collapsed")

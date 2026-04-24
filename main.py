@@ -46,6 +46,26 @@ except ImportError:
     def get_period_label(k): return ""
     def detect_period_from_locked(t): return []
 
+# v3.1 시나리오 → 소설화 추출 모듈
+try:
+    from scenario_extractor import (
+        extract_text_from_docx,
+        extract_text_from_txt,
+        analyze_scenario_structure,
+        extract_scenario_fields,
+        build_unit_mapping_text,
+        SCENARIO_EXTRACTOR_VERSION,
+    )
+    _SCENARIO_EXTRACTOR_AVAILABLE = True
+except ImportError:
+    _SCENARIO_EXTRACTOR_AVAILABLE = False
+    def extract_text_from_docx(b): return ""
+    def extract_text_from_txt(b): return ""
+    def analyze_scenario_structure(t): return {}
+    def extract_scenario_fields(t, c, **kw): return {"_error": "scenario_extractor 미로드"}
+    def build_unit_mapping_text(m): return ""
+    SCENARIO_EXTRACTOR_VERSION = "미로드"
+
 # ─────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────
@@ -321,6 +341,12 @@ DEFAULT_STATE = {
     "title_review": "",
     "status_message": "",
     "status_type": "info",
+    # v3.1 시나리오 → 소설화 모드 상태
+    "scenario_text": "",           # 업로드된 시나리오 원문
+    "scenario_stats": {},          # 통계
+    "scenario_extracted": {},      # Sonnet 추출 결과 (dict)
+    "scenario_mapping_text": "",   # STEP 4 주입용 텍스트
+    "scenario_fields_applied": False,  # STEP 1 자동 입력 완료 여부
 }
 
 for k, v in DEFAULT_STATE.items():
@@ -1083,16 +1109,33 @@ st.markdown(
 render_status()
 
 # ─────────────────────────────────────
-# v3.0 SIDEBAR: 버전 및 활성 모듈 표시
+# v3.1 SIDEBAR: 버전 및 활성 모듈 표시
 # ─────────────────────────────────────
 with st.sidebar:
     st.markdown(f"### 👖 Novel Engine {NOVEL_ENGINE_VERSION}")
     st.caption(f"Build {NOVEL_ENGINE_BUILD_DATE}")
+
+    # v3.1 시나리오 모드 상태
+    if st.session_state.get("scenario_fields_applied"):
+        st.success("📄 시나리오 소설화 모드 활성")
+        stats = st.session_state.get("scenario_stats", {})
+        st.caption(f"원작: {stats.get('char_count', 0):,}자 · {stats.get('scene_count', 0)}씬")
+
     st.markdown("---")
-    st.markdown("**v3.0 신규 모듈**")
+    st.markdown("**v3.1 신규**")
     st.markdown(
         f"""
-- M1 BJND Scene Enforcer (자동 재생성)
+- 📄 시나리오 업로드 모드
+- 🧬 Sonnet 자동 추출 (STEP 1)
+- 🗺️ 12 Unit 매핑 가이드 (STEP 4)
+- 추출기: {'✅' if _SCENARIO_EXTRACTOR_AVAILABLE else '❌'}
+"""
+    )
+    st.markdown("---")
+    st.markdown("**v3.0 모듈**")
+    st.markdown(
+        f"""
+- M1 BJND Scene Enforcer
 - M2 OPENING MASTERY
 - M3 BJND 4축 자기검증
 - M4 Sub-genre OVERRIDE 4종
@@ -1117,15 +1160,154 @@ with st.sidebar:
     st.caption("임계치 초과 시 자동 재생성 1회")
 
 # ─────────────────────────────────────
+# v3.1 STEP 0 · 시나리오 업로드 (선택)
+# ─────────────────────────────────────
+st.markdown('<div class="section-header">📄 STEP 0 · 시나리오 업로드 (선택 — 시나리오 소설화 모드)</div>', unsafe_allow_html=True)
+
+st.markdown(
+    """
+<div class="callout">
+기존 시나리오(DOCX/TXT)를 업로드하면 Sonnet이 자동으로 STEP 1 입력 자료와 STEP 4 12 Unit 매핑 가이드를 생성합니다.
+추출 결과는 수정 가능한 형태로 STEP 1 필드에 자동 입력됩니다. 시나리오가 없으면 이 단계를 건너뛰고 STEP 1부터 수동 입력하세요.
+</div>
+""",
+    unsafe_allow_html=True,
+)
+
+scenario_col1, scenario_col2 = st.columns([1, 1])
+
+with scenario_col1:
+    scenario_file = st.file_uploader(
+        "시나리오 파일 업로드 (.docx / .txt)",
+        type=["docx", "txt"],
+        key="scenario_upload",
+        help="시나리오 원문 파일. Sonnet이 읽고 전체 구조를 추출합니다.",
+    )
+
+with scenario_col2:
+    scenario_pasted = st.text_area(
+        "또는 시나리오 붙여넣기",
+        height=120,
+        placeholder="파일 업로드 대신 시나리오를 직접 붙여넣을 수 있습니다.",
+        key="scenario_paste",
+    )
+
+# 파일이 업로드되면 즉시 텍스트 추출
+if scenario_file is not None:
+    try:
+        file_bytes = scenario_file.read()
+        if scenario_file.name.lower().endswith(".docx"):
+            extracted_text = extract_text_from_docx(file_bytes)
+        else:
+            extracted_text = extract_text_from_txt(file_bytes)
+        if extracted_text.strip():
+            st.session_state["scenario_text"] = extracted_text
+            st.session_state["scenario_stats"] = analyze_scenario_structure(extracted_text)
+        else:
+            st.error("파일에서 텍스트를 추출하지 못했습니다. TXT 인코딩을 확인하거나 붙여넣기를 사용해 주세요.")
+    except Exception as e:
+        st.error(f"파일 처리 오류: {e}")
+elif scenario_pasted and scenario_pasted.strip():
+    st.session_state["scenario_text"] = scenario_pasted.strip()
+    st.session_state["scenario_stats"] = analyze_scenario_structure(scenario_pasted.strip())
+
+# 업로드된 시나리오가 있으면 통계와 추출 버튼 표시
+if st.session_state.get("scenario_text", "").strip():
+    stats = st.session_state.get("scenario_stats", {})
+    st.markdown("**📊 시나리오 구조 통계**")
+    stat_cols = st.columns(6)
+    stat_cols[0].metric("글자 수", f"{stats.get('char_count', 0):,}")
+    stat_cols[1].metric("문단 수", f"{stats.get('paragraph_count', 0):,}")
+    stat_cols[2].metric("추정 씬 수", stats.get("scene_count", 0))
+    stat_cols[3].metric("V.O 지시", stats.get("vo_count", 0))
+    stat_cols[4].metric("CUT 지시", stats.get("cut_count", 0))
+    stat_cols[5].metric("회상 씬", stats.get("flashback_count", 0))
+
+    extract_col1, extract_col2 = st.columns([2, 1])
+    with extract_col1:
+        if st.button(
+            "🧬 Sonnet 자동 추출 실행 — STEP 1 필드 + STEP 4 매핑 생성",
+            type="primary",
+            use_container_width=True,
+            disabled=not _SCENARIO_EXTRACTOR_AVAILABLE,
+        ):
+            client = get_client()
+            if client is None:
+                st.error("ANTHROPIC_API_KEY가 설정되지 않았습니다.")
+            else:
+                with st.spinner("시나리오를 분석하고 있습니다... (30~60초 소요)"):
+                    result = extract_scenario_fields(
+                        scenario_text=st.session_state["scenario_text"],
+                        anthropic_client=client,
+                        model=DEFAULT_MODEL,
+                        max_tokens=MAX_TOKENS_LONG,
+                    )
+                if "_error" in result:
+                    st.error(f"추출 실패: {result['_error']}")
+                    if "_raw_response" in result:
+                        with st.expander("응답 원문 보기"):
+                            st.text(result["_raw_response"])
+                else:
+                    st.session_state["scenario_extracted"] = result
+                    mapping_text = build_unit_mapping_text(result.get("unit_mapping", []))
+                    st.session_state["scenario_mapping_text"] = mapping_text
+                    st.session_state["scenario_fields_applied"] = True
+                    st.success(
+                        "✅ 추출 완료. STEP 1 필드가 자동 입력되었고, STEP 4 Unit 설계 시 매핑 가이드가 자동 주입됩니다. "
+                        "필요하면 STEP 1에서 수정하세요."
+                    )
+                    st.rerun()
+
+    with extract_col2:
+        if st.session_state.get("scenario_fields_applied"):
+            if st.button("🔄 추출 결과 초기화", use_container_width=True):
+                st.session_state["scenario_extracted"] = {}
+                st.session_state["scenario_mapping_text"] = ""
+                st.session_state["scenario_fields_applied"] = False
+                st.rerun()
+
+    # 추출 결과 미리보기
+    extracted = st.session_state.get("scenario_extracted", {})
+    if extracted and "_error" not in extracted:
+        with st.expander("🔍 추출 결과 미리보기", expanded=False):
+            st.markdown(f"**로그라인:** {extracted.get('logline', '')}")
+            st.markdown(f"**장르:** {extracted.get('genre', '')}")
+            st.markdown(f"**주인공 직업:** {extracted.get('profession_protagonist', '')}")
+            st.markdown(f"**적대자/조연 직업:** {extracted.get('profession_antagonist', '')}")
+            st.markdown(f"**시대 키:** {extracted.get('period_keys', [])}")
+            st.markdown("**작품 개요:**")
+            st.text(extracted.get("overview", ""))
+            st.markdown("**캐릭터:**")
+            st.text(extracted.get("characters", "")[:1000] + ("..." if len(extracted.get("characters", "")) > 1000 else ""))
+            st.markdown("**12 Unit 매핑 가이드:**")
+            mapping = extracted.get("unit_mapping", [])
+            for item in mapping:
+                st.markdown(f"- **Unit {item.get('unit_no', '?')}**: {item.get('function', '')}")
+
+# v3.1: STEP 1 필드 기본값 결정 (추출 결과 있으면 그걸 사용)
+_ex = st.session_state.get("scenario_extracted", {}) if st.session_state.get("scenario_fields_applied") else {}
+
+# ─────────────────────────────────────
 # STEP 1
 # ─────────────────────────────────────
 st.markdown('<div class="section-header">🔥 STEP 1 · 작품 자료 입력</div>', unsafe_allow_html=True)
 
+if st.session_state.get("scenario_fields_applied"):
+    st.info("📄 시나리오 추출 결과가 자동 입력되었습니다. 필요하면 아래 필드를 수정하세요.")
+
 col1, col2 = st.columns([1, 1])
 
 with col1:
-    working_title = st.text_input("현재 가제", placeholder="예: 감각구역 / 머지 앤 어퀴지션 / 검은 항구")
-    genre = st.text_input("장르", placeholder="예: 스릴러, 역사드라마, 금융 스릴러, 첩보물")
+    working_title = st.text_input(
+        "현재 가제",
+        value=_ex.get("logline", "")[:30] if _ex else "",
+        placeholder="예: 감각구역 / 머지 앤 어퀴지션 / 검은 항구",
+    )
+    genre = st.text_input(
+        "장르",
+        value=_ex.get("genre", "") if _ex else "",
+        placeholder="예: 스릴러, 역사드라마, 금융 스릴러, 첩보물",
+    )
     format_mode = st.selectbox("형식", ["장편소설", "웹소설", "하이브리드"], index=0)
 
 with col2:
@@ -1136,24 +1318,28 @@ with col2:
 overview = st.text_area(
     "작품 개요",
     height=220,
+    value=_ex.get("overview", "") if _ex else "",
     placeholder="로그라인, 기획의도, 세계관, 장르 톤, 작품의 핵심 질문, 차별점",
 )
 
 characters = st.text_area(
     "캐릭터",
     height=220,
+    value=_ex.get("characters", "") if _ex else "",
     placeholder="주인공 / 적대자 / 조력자 / 핵심 관계, 각 인물의 욕망 / 결핍 / 비밀 / 변화",
 )
 
 synopsis = st.text_area(
     "줄거리 / 트리트먼트",
     height=260,
+    value=_ex.get("synopsis", "") if _ex else "",
     placeholder="시작, 중반, 위기, 클라이맥스, 엔딩 방향, 반드시 살릴 사건",
 )
 
 notes = st.text_area(
     "추가 메모 (선택)",
     height=180,
+    value=_ex.get("notes", "") if _ex else "",
     placeholder="약한 부분, 반드시 살릴 장면, 정보 레이어, 역사 고증 메모, 참고 톤",
 )
 
@@ -1180,6 +1366,7 @@ prof_col1, prof_col2 = st.columns([1, 1])
 with prof_col1:
     profession_protagonist = st.text_input(
         "주인공 직업 (M5)",
+        value=_ex.get("profession_protagonist", "") if _ex else "",
         placeholder="예: M&A 변호사 / 강력계 형사 / 오너 셰프 / 투자은행 VP / 군의관",
         help="Profession Pack이 자동 감지하여 전문 용어·공간·일상·스트레스를 주입합니다.",
     )
@@ -1187,6 +1374,7 @@ with prof_col1:
 with prof_col2:
     profession_antagonist = st.text_input(
         "주요 조연/적대자 직업 (M5, 선택)",
+        value=_ex.get("profession_antagonist", "") if _ex else "",
         placeholder="예: 검사 / 조직폭력 보스 / 기자 / 로비스트",
         help="주인공과 다른 직업이면 추가 주입. 같으면 중복 방지.",
     )
@@ -1207,9 +1395,16 @@ with period_col2:
     if period_mode == "수동 선택" and PERIOD_KEYS:
         # 한국어 라벨로 표시하되 내부 키로 저장
         period_options = [f"{k} · {get_period_label(k)}" for k in PERIOD_KEYS]
+        # v3.1: 추출된 시대 키를 기본값으로
+        default_labels = []
+        if _ex and _ex.get("period_keys"):
+            for k in _ex["period_keys"][:2]:
+                if k in PERIOD_KEYS:
+                    default_labels.append(f"{k} · {get_period_label(k)}")
         selected_labels = st.multiselect(
             "시대 선택 (최대 2개, 다중 시대 교차 전개 시 2개)",
             period_options,
+            default=default_labels,
             max_selections=2,
             help="일제강점기 + 현대, 구한말 + 일제강점기 등 교차 전개도 가능.",
         )
@@ -1224,6 +1419,7 @@ with lock_col1:
     locked_text = st.text_area(
         "🔒 LOCKED 설정 (절대 변경 불가)",
         height=180,
+        value=_ex.get("locked_text", "") if _ex else "",
         placeholder="변경 금지 항목을 줄 단위로 입력\n예:\n- 한유진: QLCP 대표. 직책 변경 금지.\n- 마이클 모건: 적대자. 동맹으로 변경 금지.\n- 기획의도: 글로벌 금융 권력 비판이 테마에 반영되어야 함.",
     )
 
@@ -1231,6 +1427,7 @@ with lock_col2:
     open_text = st.text_area(
         "🔓 OPEN 설정 (창작 가능 범위)",
         height=180,
+        value=_ex.get("open_text", "") if _ex else "",
         placeholder="자유롭게 창작 가능한 항목\n예:\n- 캐릭터 외형, 습관, 말투 디테일은 자유롭게 확장 가능.\n- 장면별 감정 변화와 감각 묘사는 자유롭게 창작 가능.",
     )
 
@@ -1410,6 +1607,8 @@ def build_blueprint(group_key: str):
             # v3.0 신규
             profession_text=profession_text_combined,
             period_keys=active_period_keys,
+            # v3.1 신규: 시나리오 소설화 매핑 가이드
+            scenario_mapping=st.session_state.get("scenario_mapping_text", ""),
         )
         return llm_call(prompt, max_tokens=MAX_TOKENS_MID)
 

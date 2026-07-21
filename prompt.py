@@ -1959,11 +1959,19 @@ Punch 규칙: {r['punch_rule']}
 
 
 # =================================================================
-# [9] v3.1 VERSION INFO
+# [9] VERSION INFO
 # =================================================================
-NOVEL_ENGINE_VERSION = "v3.1"
-NOVEL_ENGINE_BUILD_DATE = "2026-04-24"
-NOVEL_ENGINE_VERSION_TAG = "v3.1 / 2026-04-24 / Scenario-to-Novel Mode + v3.0 All Modules"
+# 변경 이력 (누적 — 삭제 금지)
+# - v3.0 : Phase A 데이터 모듈 통합 + M1~M10 전체 룰셋
+# - v3.1 : Scenario-to-Novel Mode (STEP 0 시나리오 업로드 + Sonnet 추출)
+# - v3.2.0 : Creator Engine JSON → 소설화 모드 추가
+#            · STEP 0 탭 UI 개편 (시나리오 텍스트 / Creator JSON)
+#            · creator_extractor.py 신규 — 영상 기획 JSON을 소설 언어로 번역
+#            · char_bible·world_build·three_act·tone_doc 최대 보존 매핑
+#            · 출력 키 구조는 scenario_extractor와 동일 (STEP 1 무수정 호환)
+NOVEL_ENGINE_VERSION = "v3.2.0"
+NOVEL_ENGINE_BUILD_DATE = "2026-07-21"
+NOVEL_ENGINE_VERSION_TAG = "v3.2.0 / 2026-07-21 / Creator-JSON-to-Novel Mode + Scenario Mode + v3.0 All Modules"
 
 def get_novel_engine_version_info() -> str:
     """Novel Engine v3.0 메타 정보."""

@@ -66,6 +66,24 @@ except ImportError:
     def build_unit_mapping_text(m): return ""
     SCENARIO_EXTRACTOR_VERSION = "미로드"
 
+# v3.2 Creator Engine JSON → 소설화 변환 모듈
+try:
+    from creator_extractor import (
+        load_creator_json,
+        is_creator_json,
+        get_creator_meta,
+        extract_creator_fields,
+        CREATOR_EXTRACTOR_VERSION,
+    )
+    _CREATOR_EXTRACTOR_AVAILABLE = True
+except ImportError:
+    _CREATOR_EXTRACTOR_AVAILABLE = False
+    def load_creator_json(b): return {"_error": "creator_extractor 미로드"}
+    def is_creator_json(d): return False
+    def get_creator_meta(d): return {}
+    def extract_creator_fields(d, c, **kw): return {"_error": "creator_extractor 미로드"}
+    CREATOR_EXTRACTOR_VERSION = "미로드"
+
 # ─────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────
@@ -347,6 +365,9 @@ DEFAULT_STATE = {
     "scenario_extracted": {},      # Sonnet 추출 결과 (dict)
     "scenario_mapping_text": "",   # STEP 4 주입용 텍스트
     "scenario_fields_applied": False,  # STEP 1 자동 입력 완료 여부
+    # v3.2 Creator Engine JSON → 소설화 모드 상태
+    "creator_json_data": {},       # 업로드된 Creator JSON 원본 (dict)
+    "creator_json_meta": {},       # UI 미리보기용 메타
 }
 
 for k, v in DEFAULT_STATE.items():
@@ -1162,127 +1183,248 @@ with st.sidebar:
 # ─────────────────────────────────────
 # v3.1 STEP 0 · 시나리오 업로드 (선택)
 # ─────────────────────────────────────
-st.markdown('<div class="section-header">📄 STEP 0 · 시나리오 업로드 (선택 — 시나리오 소설화 모드)</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-header">📄 STEP 0 · 원작 불러오기 (선택 — 소설화 모드)</div>', unsafe_allow_html=True)
 
 st.markdown(
     """
 <div class="callout">
-기존 시나리오(DOCX/TXT)를 업로드하면 Sonnet이 자동으로 STEP 1 입력 자료와 STEP 4 12 Unit 매핑 가이드를 생성합니다.
-추출 결과는 수정 가능한 형태로 STEP 1 필드에 자동 입력됩니다. 시나리오가 없으면 이 단계를 건너뛰고 STEP 1부터 수동 입력하세요.
+소설로 옮길 원작을 불러옵니다. <b>시나리오 텍스트</b>(DOCX/TXT) 또는 <b>Creator Engine 기획 JSON</b>(영화·시리즈) 중 하나를 선택하세요.
+어느 쪽이든 Sonnet이 STEP 1 입력 자료와 STEP 4 12 Unit 매핑 가이드를 자동 생성합니다.
+추출 결과는 수정 가능한 형태로 STEP 1 필드에 자동 입력됩니다. 원작이 없으면 이 단계를 건너뛰고 STEP 1부터 수동 입력하세요.
 </div>
 """,
     unsafe_allow_html=True,
 )
 
-scenario_col1, scenario_col2 = st.columns([1, 1])
+step0_tab_scenario, step0_tab_creator = st.tabs(
+    ["📄 시나리오 텍스트", "🌱 Creator Engine JSON"]
+)
 
-with scenario_col1:
-    scenario_file = st.file_uploader(
-        "시나리오 파일 업로드 (.docx / .txt)",
-        type=["docx", "txt"],
-        key="scenario_upload",
-        help="시나리오 원문 파일. Sonnet이 읽고 전체 구조를 추출합니다.",
-    )
+with step0_tab_scenario:
+    scenario_col1, scenario_col2 = st.columns([1, 1])
 
-with scenario_col2:
-    scenario_pasted = st.text_area(
-        "또는 시나리오 붙여넣기",
-        height=120,
-        placeholder="파일 업로드 대신 시나리오를 직접 붙여넣을 수 있습니다.",
-        key="scenario_paste",
-    )
+    with scenario_col1:
+        scenario_file = st.file_uploader(
+            "시나리오 파일 업로드 (.docx / .txt)",
+            type=["docx", "txt"],
+            key="scenario_upload",
+            help="시나리오 원문 파일. Sonnet이 읽고 전체 구조를 추출합니다.",
+        )
 
-# 파일이 업로드되면 즉시 텍스트 추출
-if scenario_file is not None:
-    try:
-        file_bytes = scenario_file.read()
-        if scenario_file.name.lower().endswith(".docx"):
-            extracted_text = extract_text_from_docx(file_bytes)
-        else:
-            extracted_text = extract_text_from_txt(file_bytes)
-        if extracted_text.strip():
-            st.session_state["scenario_text"] = extracted_text
-            st.session_state["scenario_stats"] = analyze_scenario_structure(extracted_text)
-        else:
-            st.error("파일에서 텍스트를 추출하지 못했습니다. TXT 인코딩을 확인하거나 붙여넣기를 사용해 주세요.")
-    except Exception as e:
-        st.error(f"파일 처리 오류: {e}")
-elif scenario_pasted and scenario_pasted.strip():
-    st.session_state["scenario_text"] = scenario_pasted.strip()
-    st.session_state["scenario_stats"] = analyze_scenario_structure(scenario_pasted.strip())
+    with scenario_col2:
+        scenario_pasted = st.text_area(
+            "또는 시나리오 붙여넣기",
+            height=120,
+            placeholder="파일 업로드 대신 시나리오를 직접 붙여넣을 수 있습니다.",
+            key="scenario_paste",
+        )
 
-# 업로드된 시나리오가 있으면 통계와 추출 버튼 표시
-if st.session_state.get("scenario_text", "").strip():
-    stats = st.session_state.get("scenario_stats", {})
-    st.markdown("**📊 시나리오 구조 통계**")
-    stat_cols = st.columns(6)
-    stat_cols[0].metric("글자 수", f"{stats.get('char_count', 0):,}")
-    stat_cols[1].metric("문단 수", f"{stats.get('paragraph_count', 0):,}")
-    stat_cols[2].metric("추정 씬 수", stats.get("scene_count", 0))
-    stat_cols[3].metric("V.O 지시", stats.get("vo_count", 0))
-    stat_cols[4].metric("CUT 지시", stats.get("cut_count", 0))
-    stat_cols[5].metric("회상 씬", stats.get("flashback_count", 0))
-
-    extract_col1, extract_col2 = st.columns([2, 1])
-    with extract_col1:
-        if st.button(
-            "🧬 Sonnet 자동 추출 실행 — STEP 1 필드 + STEP 4 매핑 생성",
-            type="primary",
-            use_container_width=True,
-            disabled=not _SCENARIO_EXTRACTOR_AVAILABLE,
-        ):
-            client = get_client()
-            if client is None:
-                st.error("ANTHROPIC_API_KEY가 설정되지 않았습니다.")
+    # 파일이 업로드되면 즉시 텍스트 추출
+    if scenario_file is not None:
+        try:
+            file_bytes = scenario_file.read()
+            if scenario_file.name.lower().endswith(".docx"):
+                extracted_text = extract_text_from_docx(file_bytes)
             else:
-                with st.spinner("시나리오를 분석하고 있습니다... (30~60초 소요)"):
-                    result = extract_scenario_fields(
-                        scenario_text=st.session_state["scenario_text"],
-                        anthropic_client=client,
-                        model=DEFAULT_MODEL,
-                        max_tokens=MAX_TOKENS_LONG,
-                    )
-                if "_error" in result:
-                    st.error(f"추출 실패: {result['_error']}")
-                    if "_raw_response" in result:
-                        with st.expander("응답 원문 보기"):
-                            st.text(result["_raw_response"])
+                extracted_text = extract_text_from_txt(file_bytes)
+            if extracted_text.strip():
+                st.session_state["scenario_text"] = extracted_text
+                st.session_state["scenario_stats"] = analyze_scenario_structure(extracted_text)
+            else:
+                st.error("파일에서 텍스트를 추출하지 못했습니다. TXT 인코딩을 확인하거나 붙여넣기를 사용해 주세요.")
+        except Exception as e:
+            st.error(f"파일 처리 오류: {e}")
+    elif scenario_pasted and scenario_pasted.strip():
+        st.session_state["scenario_text"] = scenario_pasted.strip()
+        st.session_state["scenario_stats"] = analyze_scenario_structure(scenario_pasted.strip())
+
+    # 업로드된 시나리오가 있으면 통계와 추출 버튼 표시
+    if st.session_state.get("scenario_text", "").strip():
+        stats = st.session_state.get("scenario_stats", {})
+        st.markdown("**📊 시나리오 구조 통계**")
+        stat_cols = st.columns(6)
+        stat_cols[0].metric("글자 수", f"{stats.get('char_count', 0):,}")
+        stat_cols[1].metric("문단 수", f"{stats.get('paragraph_count', 0):,}")
+        stat_cols[2].metric("추정 씬 수", stats.get("scene_count", 0))
+        stat_cols[3].metric("V.O 지시", stats.get("vo_count", 0))
+        stat_cols[4].metric("CUT 지시", stats.get("cut_count", 0))
+        stat_cols[5].metric("회상 씬", stats.get("flashback_count", 0))
+
+        extract_col1, extract_col2 = st.columns([2, 1])
+        with extract_col1:
+            if st.button(
+                "🧬 Sonnet 자동 추출 실행 — STEP 1 필드 + STEP 4 매핑 생성",
+                type="primary",
+                use_container_width=True,
+                disabled=not _SCENARIO_EXTRACTOR_AVAILABLE,
+            ):
+                client = get_client()
+                if client is None:
+                    st.error("ANTHROPIC_API_KEY가 설정되지 않았습니다.")
                 else:
-                    st.session_state["scenario_extracted"] = result
-                    mapping_text = build_unit_mapping_text(result.get("unit_mapping", []))
-                    st.session_state["scenario_mapping_text"] = mapping_text
-                    st.session_state["scenario_fields_applied"] = True
-                    st.success(
-                        "✅ 추출 완료. STEP 1 필드가 자동 입력되었고, STEP 4 Unit 설계 시 매핑 가이드가 자동 주입됩니다. "
-                        "필요하면 STEP 1에서 수정하세요."
-                    )
+                    with st.spinner("시나리오를 분석하고 있습니다... (30~60초 소요)"):
+                        result = extract_scenario_fields(
+                            scenario_text=st.session_state["scenario_text"],
+                            anthropic_client=client,
+                            model=DEFAULT_MODEL,
+                            max_tokens=MAX_TOKENS_LONG,
+                        )
+                    if "_error" in result:
+                        st.error(f"추출 실패: {result['_error']}")
+                        if "_raw_response" in result:
+                            with st.expander("응답 원문 보기"):
+                                st.text(result["_raw_response"])
+                    else:
+                        st.session_state["scenario_extracted"] = result
+                        mapping_text = build_unit_mapping_text(result.get("unit_mapping", []))
+                        st.session_state["scenario_mapping_text"] = mapping_text
+                        st.session_state["scenario_fields_applied"] = True
+                        st.success(
+                            "✅ 추출 완료. STEP 1 필드가 자동 입력되었고, STEP 4 Unit 설계 시 매핑 가이드가 자동 주입됩니다. "
+                            "필요하면 STEP 1에서 수정하세요."
+                        )
+                        st.rerun()
+
+        with extract_col2:
+            if st.session_state.get("scenario_fields_applied"):
+                if st.button("🔄 추출 결과 초기화", use_container_width=True):
+                    st.session_state["scenario_extracted"] = {}
+                    st.session_state["scenario_mapping_text"] = ""
+                    st.session_state["scenario_fields_applied"] = False
                     st.rerun()
 
-    with extract_col2:
-        if st.session_state.get("scenario_fields_applied"):
-            if st.button("🔄 추출 결과 초기화", use_container_width=True):
-                st.session_state["scenario_extracted"] = {}
-                st.session_state["scenario_mapping_text"] = ""
-                st.session_state["scenario_fields_applied"] = False
-                st.rerun()
+        # 추출 결과 미리보기
+        extracted = st.session_state.get("scenario_extracted", {})
+        if extracted and "_error" not in extracted:
+            with st.expander("🔍 추출 결과 미리보기", expanded=False):
+                st.markdown(f"**로그라인:** {extracted.get('logline', '')}")
+                st.markdown(f"**장르:** {extracted.get('genre', '')}")
+                st.markdown(f"**주인공 직업:** {extracted.get('profession_protagonist', '')}")
+                st.markdown(f"**적대자/조연 직업:** {extracted.get('profession_antagonist', '')}")
+                st.markdown(f"**시대 키:** {extracted.get('period_keys', [])}")
+                st.markdown("**작품 개요:**")
+                st.text(extracted.get("overview", ""))
+                st.markdown("**캐릭터:**")
+                st.text(extracted.get("characters", "")[:1000] + ("..." if len(extracted.get("characters", "")) > 1000 else ""))
+                st.markdown("**12 Unit 매핑 가이드:**")
+                mapping = extracted.get("unit_mapping", [])
+                for item in mapping:
+                    st.markdown(f"- **Unit {item.get('unit_no', '?')}**: {item.get('function', '')}")
 
-    # 추출 결과 미리보기
-    extracted = st.session_state.get("scenario_extracted", {})
-    if extracted and "_error" not in extracted:
-        with st.expander("🔍 추출 결과 미리보기", expanded=False):
-            st.markdown(f"**로그라인:** {extracted.get('logline', '')}")
-            st.markdown(f"**장르:** {extracted.get('genre', '')}")
-            st.markdown(f"**주인공 직업:** {extracted.get('profession_protagonist', '')}")
-            st.markdown(f"**적대자/조연 직업:** {extracted.get('profession_antagonist', '')}")
-            st.markdown(f"**시대 키:** {extracted.get('period_keys', [])}")
-            st.markdown("**작품 개요:**")
-            st.text(extracted.get("overview", ""))
-            st.markdown("**캐릭터:**")
-            st.text(extracted.get("characters", "")[:1000] + ("..." if len(extracted.get("characters", "")) > 1000 else ""))
-            st.markdown("**12 Unit 매핑 가이드:**")
-            mapping = extracted.get("unit_mapping", [])
-            for item in mapping:
-                st.markdown(f"- **Unit {item.get('unit_no', '?')}**: {item.get('function', '')}")
+with step0_tab_creator:
+    st.markdown(
+        "**Creator Engine이 뽑은 기획 JSON(영화·시리즈 format)을 업로드하면, "
+        "영상 서사를 소설 언어로 번역해 STEP 1 필드와 STEP 4 매핑을 자동 생성합니다.**"
+    )
+    st.caption(
+        "Creator Engine의 백업 JSON 파일을 넣으세요. 캐릭터 바이블·세계관·3막 구조·톤 재료까지 "
+        "최대한 보존해 소설화합니다. 영상 전용 연출(씬·컷·지문)은 소설 서술로 자동 전환됩니다."
+    )
+
+    creator_file = st.file_uploader(
+        "Creator Engine JSON 업로드 (.json)",
+        type=["json"],
+        key="creator_json_upload",
+        help="Creator Engine v2.5+ 이 저장한 기획 JSON 백업 파일",
+        disabled=not _CREATOR_EXTRACTOR_AVAILABLE,
+    )
+
+    if creator_file is not None:
+        try:
+            data = load_creator_json(creator_file.read())
+            if "_error" in data:
+                st.error(f"JSON 로드 실패: {data['_error']}")
+            elif not is_creator_json(data):
+                st.warning(
+                    "이 파일은 Creator Engine 출력으로 보이지 않습니다. "
+                    "Idea Engine 출력이나 다른 엔진의 세이브 파일일 수 있습니다. "
+                    "Creator Engine의 기획 JSON을 확인해 주세요."
+                )
+                st.session_state["creator_json_data"] = {}
+                st.session_state["creator_json_meta"] = {}
+            else:
+                st.session_state["creator_json_data"] = data
+                st.session_state["creator_json_meta"] = get_creator_meta(data)
+        except Exception as e:
+            st.error(f"파일 처리 오류: {e}")
+
+    # 로드된 Creator JSON이 있으면 메타 카드 + 변환 버튼
+    _cmeta = st.session_state.get("creator_json_meta", {})
+    if _cmeta:
+        st.markdown("**📋 Creator 기획 정보**")
+        cm_cols = st.columns(4)
+        cm_cols[0].metric("제목", _cmeta.get("title", "-"))
+        cm_cols[1].metric("원본 매체", _cmeta.get("format", "-"))
+        cm_cols[2].metric("장르", _cmeta.get("genre", "-"))
+        cm_cols[3].metric("캐릭터", f"{_cmeta.get('char_count', '0')}명")
+        st.caption(
+            f"엔진: {_cmeta.get('engine', '-')} {_cmeta.get('engine_version', '')} · "
+            f"단계: {_cmeta.get('stage', '-')} · 완성도: {_cmeta.get('final_score', '-')}"
+        )
+
+        cv_col1, cv_col2 = st.columns([2, 1])
+        with cv_col1:
+            if st.button(
+                "🌱 Creator JSON → 소설화 변환 (STEP 1 필드 + STEP 4 매핑 생성)",
+                type="primary",
+                use_container_width=True,
+                key="convert_creator_btn",
+                disabled=not _CREATOR_EXTRACTOR_AVAILABLE,
+            ):
+                client = get_client()
+                if client is None:
+                    st.error("ANTHROPIC_API_KEY가 설정되지 않았습니다.")
+                else:
+                    with st.spinner("영상 기획을 소설로 번역하고 있습니다... (30~60초 소요)"):
+                        result = extract_creator_fields(
+                            creator_json=st.session_state["creator_json_data"],
+                            anthropic_client=client,
+                            model=DEFAULT_MODEL,
+                            max_tokens=MAX_TOKENS_LONG,
+                        )
+                    if "_error" in result:
+                        st.error(f"변환 실패: {result['_error']}")
+                        if "_raw_response" in result:
+                            with st.expander("응답 원문 보기"):
+                                st.text(result["_raw_response"])
+                    else:
+                        st.session_state["scenario_extracted"] = result
+                        mapping_text = build_unit_mapping_text(result.get("unit_mapping", []))
+                        st.session_state["scenario_mapping_text"] = mapping_text
+                        st.session_state["scenario_fields_applied"] = True
+                        st.success(
+                            "✅ 소설화 변환 완료. STEP 1 필드가 자동 입력되었고, "
+                            "STEP 4 Unit 설계 시 매핑 가이드가 자동 주입됩니다. "
+                            "필요하면 STEP 1에서 수정하세요."
+                        )
+                        st.rerun()
+
+        with cv_col2:
+            if st.session_state.get("scenario_fields_applied"):
+                if st.button("🔄 변환 결과 초기화", use_container_width=True, key="reset_creator_btn"):
+                    st.session_state["scenario_extracted"] = {}
+                    st.session_state["scenario_mapping_text"] = ""
+                    st.session_state["scenario_fields_applied"] = False
+                    st.rerun()
+
+        # 변환 결과 미리보기 (Creator 출처인 경우만)
+        _cres = st.session_state.get("scenario_extracted", {})
+        if _cres and "_error" not in _cres and _cres.get("_source") == "creator_engine":
+            with st.expander("🔍 소설화 변환 결과 미리보기", expanded=False):
+                st.markdown(f"**로그라인:** {_cres.get('logline', '')}")
+                st.markdown(f"**장르(소설):** {_cres.get('genre', '')}")
+                st.markdown(f"**주인공 직업:** {_cres.get('profession_protagonist', '')}")
+                st.markdown(f"**적대자/조연 직업:** {_cres.get('profession_antagonist', '')}")
+                st.markdown(f"**시대 키:** {_cres.get('period_keys', [])}")
+                st.markdown("**작품 개요:**")
+                st.text(_cres.get("overview", ""))
+                st.markdown("**캐릭터:**")
+                _chtxt = _cres.get("characters", "")
+                st.text(_chtxt[:1200] + ("..." if len(_chtxt) > 1200 else ""))
+                st.markdown("**12 Unit 매핑 가이드:**")
+                for item in _cres.get("unit_mapping", []):
+                    st.markdown(f"- **Unit {item.get('unit_no', '?')}**: {item.get('function', '')}")
+
 
 # v3.1: STEP 1 필드 기본값 결정 (추출 결과 있으면 그걸 사용)
 _ex = st.session_state.get("scenario_extracted", {}) if st.session_state.get("scenario_fields_applied") else {}
@@ -1293,7 +1435,15 @@ _ex = st.session_state.get("scenario_extracted", {}) if st.session_state.get("sc
 st.markdown('<div class="section-header">🔥 STEP 1 · 작품 자료 입력</div>', unsafe_allow_html=True)
 
 if st.session_state.get("scenario_fields_applied"):
-    st.info("📄 시나리오 추출 결과가 자동 입력되었습니다. 필요하면 아래 필드를 수정하세요.")
+    if _ex.get("_source") == "creator_engine":
+        _src_title = _ex.get("_source_title", "")
+        _src_fmt = _ex.get("_source_format", "")
+        st.info(
+            f"🌱 Creator 기획 '{_src_title}'({_src_fmt})을 소설화한 결과가 자동 입력되었습니다. "
+            "필요하면 아래 필드를 수정하세요."
+        )
+    else:
+        st.info("📄 시나리오 추출 결과가 자동 입력되었습니다. 필요하면 아래 필드를 수정하세요.")
 
 col1, col2 = st.columns([1, 1])
 

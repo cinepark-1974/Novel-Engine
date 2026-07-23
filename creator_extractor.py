@@ -438,6 +438,35 @@ STEP 4 12 Unit 매핑 가이드를 추출하라.
 
 
 # ─────────────────────────────────────
+# 응답 텍스트 안전 추출 (v3.3.2)
+# ─────────────────────────────────────
+def _response_text(response) -> str:
+    """Anthropic 응답에서 텍스트 블록만 골라 결합한다.
+
+    adaptive thinking이 켜진 모델(Sonnet 5, Opus 4.8 등)은 응답의 첫 블록이
+    ThinkingBlock일 수 있다. content[0].text로 접근하면
+    'ThinkingBlock' object has no attribute 'text' 오류가 난다.
+    따라서 type이 'text'인 블록만 수집한다.
+    """
+    if response is None or not getattr(response, "content", None):
+        return ""
+    parts = []
+    for block in response.content:
+        if getattr(block, "type", None) == "text":
+            t = getattr(block, "text", "")
+            if t:
+                parts.append(t)
+    if parts:
+        return "\n".join(parts).strip()
+    # 폴백 — type 속성이 없는 SDK 변형 대응
+    for block in response.content:
+        t = getattr(block, "text", None)
+        if isinstance(t, str) and t.strip():
+            return t.strip()
+    return ""
+
+
+# ─────────────────────────────────────
 # JSON 파싱 (scenario_extractor와 동일 로직)
 # ─────────────────────────────────────
 def _extract_json_from_response(text: str) -> Optional[Dict[str, Any]]:
@@ -567,7 +596,7 @@ def extract_creator_fields(
             system="당신은 JSON만 출력하는 영상→소설 변환기다. 다른 텍스트 일체 금지.",
             messages=[{"role": "user", "content": prompt}],
         )
-        raw_text = response.content[0].text if response.content else ""
+        raw_text = _response_text(response)
     except Exception as e:
         return {"_error": f"Anthropic API 호출 실패: {str(e)}"}
 

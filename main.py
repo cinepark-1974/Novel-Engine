@@ -413,6 +413,29 @@ def get_client() -> Optional["anthropic.Anthropic"]:
     return anthropic.Anthropic(api_key=api_key)
 
 
+def response_text(response) -> str:
+    """Anthropic 응답에서 텍스트 블록만 골라 결합한다. (v3.3.2)
+
+    adaptive thinking이 켜진 모델(Sonnet 5, Opus 4.8 등)은 첫 블록이
+    ThinkingBlock일 수 있어 content[0].text 접근이 실패한다.
+    """
+    if response is None or not getattr(response, "content", None):
+        return ""
+    parts = []
+    for block in response.content:
+        if getattr(block, "type", None) == "text":
+            t = getattr(block, "text", "")
+            if t:
+                parts.append(t)
+    if parts:
+        return "\n".join(parts).strip()
+    for block in response.content:
+        t = getattr(block, "text", None)
+        if isinstance(t, str) and t.strip():
+            return t.strip()
+    return ""
+
+
 def llm_call(user_prompt: str, max_tokens: int = MAX_TOKENS_MID, use_opus: bool = False) -> str:
     client = get_client()
     if client is None:
@@ -431,11 +454,7 @@ def llm_call(user_prompt: str, max_tokens: int = MAX_TOKENS_MID, use_opus: bool 
         messages=[{"role": "user", "content": user_prompt}],
     )
 
-    parts = []
-    for block in response.content:
-        if getattr(block, "type", None) == "text":
-            parts.append(block.text)
-    return "\n".join(parts).strip()
+    return response_text(response)
 
 
 def merge_nonempty(parts: List[str], sep: str = "\n\n") -> str:
@@ -710,7 +729,7 @@ def generate_unit_summary(unit_no: int, text: str) -> str:
                 ),
             }],
         )
-        return resp.content[0].text.strip()
+        return response_text(resp).strip()
     except Exception:
         return ""
 
@@ -748,7 +767,7 @@ def extract_characters_from_text(text: str) -> str:
                 ),
             }],
         )
-        return resp.content[0].text.strip()
+        return response_text(resp).strip()
     except Exception:
         return ""
 

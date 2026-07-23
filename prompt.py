@@ -1969,9 +1969,15 @@ Punch 규칙: {r['punch_rule']}
 #            · creator_extractor.py 신규 — 영상 기획 JSON을 소설 언어로 번역
 #            · char_bible·world_build·three_act·tone_doc 최대 보존 매핑
 #            · 출력 키 구조는 scenario_extractor와 동일 (STEP 1 무수정 호환)
-NOVEL_ENGINE_VERSION = "v3.2.0"
-NOVEL_ENGINE_BUILD_DATE = "2026-07-21"
-NOVEL_ENGINE_VERSION_TAG = "v3.2.0 / 2026-07-21 / Creator-JSON-to-Novel Mode + Scenario Mode + v3.0 All Modules"
+# - v3.3.0 : Idea Engine JSON → 소설화 모드 추가 (STEP 0 3탭 완성)
+#            · STEP 0 = 기존 원고 / Idea Engine JSON / Creator Engine JSON
+#            · idea_extractor.py 신규 — IdeaSeed를 소설 언어로 번역
+#            · 미결정 항목(locked_creator_questions)을 엔진 제안으로 자동 충전
+#              단, [엔진 제안 — 작가 확정 필요] 표식 강제 → 확정/제안 구분 보장
+#            · 미결정 목록을 STEP 0·STEP 1 양쪽에 표시해 검토 지점 명시
+NOVEL_ENGINE_VERSION = "v3.3.0"
+NOVEL_ENGINE_BUILD_DATE = "2026-07-23"
+NOVEL_ENGINE_VERSION_TAG = "v3.3.0 / 2026-07-23 / Idea+Creator JSON-to-Novel Mode + Scenario Mode + v3.0 All Modules"
 
 def get_novel_engine_version_info() -> str:
     """Novel Engine v3.0 메타 정보."""

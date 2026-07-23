@@ -84,6 +84,26 @@ except ImportError:
     def extract_creator_fields(d, c, **kw): return {"_error": "creator_extractor 미로드"}
     CREATOR_EXTRACTOR_VERSION = "미로드"
 
+# v3.3 Idea Engine JSON → 소설화 변환 모듈
+try:
+    from idea_extractor import (
+        load_idea_json,
+        is_idea_json,
+        get_idea_meta,
+        collect_pending_items,
+        extract_idea_fields,
+        IDEA_EXTRACTOR_VERSION,
+    )
+    _IDEA_EXTRACTOR_AVAILABLE = True
+except ImportError:
+    _IDEA_EXTRACTOR_AVAILABLE = False
+    def load_idea_json(b): return {"_error": "idea_extractor 미로드"}
+    def is_idea_json(d): return False
+    def get_idea_meta(d): return {}
+    def collect_pending_items(d): return []
+    def extract_idea_fields(d, c, **kw): return {"_error": "idea_extractor 미로드"}
+    IDEA_EXTRACTOR_VERSION = "미로드"
+
 # ─────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────
@@ -368,6 +388,10 @@ DEFAULT_STATE = {
     # v3.2 Creator Engine JSON → 소설화 모드 상태
     "creator_json_data": {},       # 업로드된 Creator JSON 원본 (dict)
     "creator_json_meta": {},       # UI 미리보기용 메타
+    # v3.3 Idea Engine JSON → 소설화 모드 상태
+    "idea_json_data": {},          # 업로드된 Idea JSON 원본 (dict)
+    "idea_json_meta": {},          # UI 미리보기용 메타
+    "idea_pending_items": [],      # 미결정 항목 목록
 }
 
 for k, v in DEFAULT_STATE.items():
@@ -1188,7 +1212,7 @@ st.markdown('<div class="section-header">📄 STEP 0 · 원작 불러오기 (선
 st.markdown(
     """
 <div class="callout">
-소설로 옮길 원작을 불러옵니다. <b>시나리오 텍스트</b>(DOCX/TXT) 또는 <b>Creator Engine 기획 JSON</b>(영화·시리즈) 중 하나를 선택하세요.
+소설로 옮길 원작을 불러옵니다. <b>기존 원고</b>(시나리오 DOCX/TXT) · <b>Idea Engine JSON</b>(기획 씨앗) · <b>Creator Engine JSON</b>(확정 기획) 중 하나를 선택하세요.
 어느 쪽이든 Sonnet이 STEP 1 입력 자료와 STEP 4 12 Unit 매핑 가이드를 자동 생성합니다.
 추출 결과는 수정 가능한 형태로 STEP 1 필드에 자동 입력됩니다. 원작이 없으면 이 단계를 건너뛰고 STEP 1부터 수동 입력하세요.
 </div>
@@ -1196,8 +1220,8 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-step0_tab_scenario, step0_tab_creator = st.tabs(
-    ["📄 시나리오 텍스트", "🌱 Creator Engine JSON"]
+step0_tab_scenario, step0_tab_idea, step0_tab_creator = st.tabs(
+    ["📄 기존 원고 (시나리오)", "💡 Idea Engine JSON", "🌱 Creator Engine JSON"]
 )
 
 with step0_tab_scenario:
@@ -1309,6 +1333,135 @@ with step0_tab_scenario:
                 st.markdown("**12 Unit 매핑 가이드:**")
                 mapping = extracted.get("unit_mapping", [])
                 for item in mapping:
+                    st.markdown(f"- **Unit {item.get('unit_no', '?')}**: {item.get('function', '')}")
+
+with step0_tab_idea:
+    st.markdown(
+        "**Idea Engine이 뽑은 기획 씨앗(IdeaSeed) JSON을 업로드하면, "
+        "기획 단계 자료를 소설 언어로 번역해 STEP 1 필드와 STEP 4 매핑을 자동 생성합니다.**"
+    )
+    st.caption(
+        "Idea 단계는 아직 결정되지 않은 항목이 남아 있습니다. 엔진이 각 미결정에 대해 제안을 채워 넣되, "
+        "해당 자리에 [엔진 제안 — 작가 확정 필요] 표식을 붙입니다. 무엇이 원본 확정이고 무엇이 엔진 판단인지 "
+        "STEP 1에서 바로 구분할 수 있습니다."
+    )
+
+    idea_file = st.file_uploader(
+        "Idea Engine JSON 업로드 (.json)",
+        type=["json"],
+        key="idea_json_upload",
+        help="Idea Engine v2.0+ 이 저장한 IdeaSeed JSON 파일",
+        disabled=not _IDEA_EXTRACTOR_AVAILABLE,
+    )
+
+    if idea_file is not None:
+        try:
+            _idata = load_idea_json(idea_file.read())
+            if "_error" in _idata:
+                st.error(f"JSON 로드 실패: {_idata['_error']}")
+            elif not is_idea_json(_idata):
+                st.warning(
+                    "이 파일은 Idea Engine 출력으로 보이지 않습니다. "
+                    "Creator Engine JSON이라면 오른쪽 'Creator Engine JSON' 탭을 사용하세요."
+                )
+                st.session_state["idea_json_data"] = {}
+                st.session_state["idea_json_meta"] = {}
+                st.session_state["idea_pending_items"] = []
+            else:
+                st.session_state["idea_json_data"] = _idata
+                st.session_state["idea_json_meta"] = get_idea_meta(_idata)
+                st.session_state["idea_pending_items"] = collect_pending_items(_idata)
+        except Exception as e:
+            st.error(f"파일 처리 오류: {e}")
+
+    _imeta = st.session_state.get("idea_json_meta", {})
+    if _imeta:
+        st.markdown("**📋 Idea 기획 정보**")
+        im_cols = st.columns(4)
+        im_cols[0].metric("제목", _imeta.get("title", "-"))
+        im_cols[1].metric("원본 매체", _imeta.get("format", "-"))
+        im_cols[2].metric("판정", _imeta.get("verdict", "-"))
+        im_cols[3].metric("미결정", f"{_imeta.get('pending_count', '0')}건")
+        st.caption(
+            f"엔진: {_imeta.get('engine', '-')} {_imeta.get('engine_version', '')} · "
+            f"장르: {_imeta.get('genre', '-')} · Hook Score: {_imeta.get('hook_score', '-')}"
+        )
+
+        # 미결정 항목 표시 — 작가가 STEP 1에서 우선 검토할 지점
+        _pend = st.session_state.get("idea_pending_items", [])
+        if _pend:
+            with st.expander(f"⚠️ 원본 미결정 {len(_pend)}건 — 엔진이 제안으로 채웁니다", expanded=True):
+                st.caption(
+                    "아래 항목은 Idea 단계에서 확정되지 않았습니다. 변환 시 엔진이 각각 제안을 선택해 "
+                    "[엔진 제안 — 작가 확정 필요] 표식과 함께 STEP 1에 넣습니다. 작가가 검토 후 확정하세요."
+                )
+                for _i, _p in enumerate(_pend, 1):
+                    _imp = _p.get("importance", "")
+                    _badge = f" `{_imp}`" if _imp else ""
+                    st.markdown(f"**{_i}. {_p.get('question', '')}**{_badge}")
+                    for _o in _p.get("options", []):
+                        st.markdown(f"    - {_o}")
+
+        iv_col1, iv_col2 = st.columns([2, 1])
+        with iv_col1:
+            if st.button(
+                "💡 Idea JSON → 소설화 변환 (미결정은 엔진 제안으로 채움)",
+                type="primary",
+                use_container_width=True,
+                key="convert_idea_btn",
+                disabled=not _IDEA_EXTRACTOR_AVAILABLE,
+            ):
+                client = get_client()
+                if client is None:
+                    st.error("ANTHROPIC_API_KEY가 설정되지 않았습니다.")
+                else:
+                    with st.spinner("기획 씨앗을 소설로 번역하고 미결정 항목을 제안하고 있습니다... (30~60초 소요)"):
+                        result = extract_idea_fields(
+                            idea_json=st.session_state["idea_json_data"],
+                            anthropic_client=client,
+                            model=DEFAULT_MODEL,
+                            max_tokens=MAX_TOKENS_LONG,
+                        )
+                    if "_error" in result:
+                        st.error(f"변환 실패: {result['_error']}")
+                        if "_raw_response" in result:
+                            with st.expander("응답 원문 보기"):
+                                st.text(result["_raw_response"])
+                    else:
+                        st.session_state["scenario_extracted"] = result
+                        mapping_text = build_unit_mapping_text(result.get("unit_mapping", []))
+                        st.session_state["scenario_mapping_text"] = mapping_text
+                        st.session_state["scenario_fields_applied"] = True
+                        st.success(
+                            "✅ 소설화 변환 완료. STEP 1 필드가 자동 입력되었습니다. "
+                            "[엔진 제안 — 작가 확정 필요] 표식이 붙은 항목을 우선 검토하세요."
+                        )
+                        st.rerun()
+
+        with iv_col2:
+            if st.session_state.get("scenario_fields_applied"):
+                if st.button("🔄 변환 결과 초기화", use_container_width=True, key="reset_idea_btn"):
+                    st.session_state["scenario_extracted"] = {}
+                    st.session_state["scenario_mapping_text"] = ""
+                    st.session_state["scenario_fields_applied"] = False
+                    st.rerun()
+
+        # 변환 결과 미리보기 (Idea 출처인 경우만)
+        _ires = st.session_state.get("scenario_extracted", {})
+        if _ires and "_error" not in _ires and _ires.get("_source") == "idea_engine":
+            with st.expander("🔍 소설화 변환 결과 미리보기", expanded=False):
+                st.markdown(f"**로그라인:** {_ires.get('logline', '')}")
+                st.markdown(f"**장르(소설):** {_ires.get('genre', '')}")
+                st.markdown(f"**주인공 직업:** {_ires.get('profession_protagonist', '')}")
+                st.markdown(f"**적대자/조연 직업:** {_ires.get('profession_antagonist', '')}")
+                st.markdown(f"**시대 키:** {_ires.get('period_keys', [])}")
+                st.markdown("**작품 개요:**")
+                st.text(_ires.get("overview", ""))
+                st.markdown("**캐릭터:**")
+                _ichtxt = _ires.get("characters", "")
+                st.text(_ichtxt[:1200] + ("..." if len(_ichtxt) > 1200 else ""))
+                st.markdown("**12 Unit 매핑 가이드:**")
+                for item in _ires.get("unit_mapping", []):
                     st.markdown(f"- **Unit {item.get('unit_no', '?')}**: {item.get('function', '')}")
 
 with step0_tab_creator:
@@ -1435,13 +1588,28 @@ _ex = st.session_state.get("scenario_extracted", {}) if st.session_state.get("sc
 st.markdown('<div class="section-header">🔥 STEP 1 · 작품 자료 입력</div>', unsafe_allow_html=True)
 
 if st.session_state.get("scenario_fields_applied"):
-    if _ex.get("_source") == "creator_engine":
-        _src_title = _ex.get("_source_title", "")
-        _src_fmt = _ex.get("_source_format", "")
+    _src = _ex.get("_source", "")
+    _src_title = _ex.get("_source_title", "")
+    _src_fmt = _ex.get("_source_format", "")
+    if _src == "creator_engine":
         st.info(
             f"🌱 Creator 기획 '{_src_title}'({_src_fmt})을 소설화한 결과가 자동 입력되었습니다. "
             "필요하면 아래 필드를 수정하세요."
         )
+    elif _src == "idea_engine":
+        _pend_list = _ex.get("_pending_items", [])
+        st.info(
+            f"💡 Idea 기획 '{_src_title}'({_src_fmt})을 소설화한 결과가 자동 입력되었습니다. "
+            "필요하면 아래 필드를 수정하세요."
+        )
+        if _pend_list:
+            st.warning(
+                f"⚠️ 원본 미결정 {len(_pend_list)}건은 엔진 제안으로 채워졌습니다. "
+                "아래 필드에서 **[엔진 제안 — 작가 확정 필요]** 표식이 붙은 부분을 우선 검토하세요."
+            )
+            with st.expander("미결정이었던 항목 보기", expanded=False):
+                for _i, _q in enumerate(_pend_list, 1):
+                    st.markdown(f"{_i}. {_q}")
     else:
         st.info("📄 시나리오 추출 결과가 자동 입력되었습니다. 필요하면 아래 필드를 수정하세요.")
 

@@ -119,7 +119,8 @@ MAX_TOKENS_LONG = 8192
 # Creator/Idea 다이제스트가 3만 자를 넘고 12 Unit 매핑까지 한 번에 뽑아야 해서
 # 8192로는 JSON이 중간에 잘릴 수 있다. 신모델(Sonnet 5 / Opus 4.8)은
 # 최대 출력 128k를 지원하므로 추출 단계만 상향한다.
-MAX_TOKENS_EXTRACT = 16000
+# v3.3.3: 16000도 부족한 사례가 있어 32000으로 재상향.
+MAX_TOKENS_EXTRACT = 32000
 
 # v3.0 M1: BJND Scene Enforcer 임계치 (사전 차단 + 자동 재생성 트리거)
 BJND_THRESHOLDS = {
@@ -1332,6 +1333,10 @@ with step0_tab_scenario:
                         )
                     if "_error" in result:
                         st.error(f"추출 실패: {result['_error']}")
+                        if result.get("_diagnostic"):
+                            with st.expander("🔎 진단 정보", expanded=True):
+                                for _dk, _dv in result["_diagnostic"].items():
+                                    st.markdown(f"- **{_dk}**: {_dv}")
                         if "_raw_response" in result:
                             with st.expander("응답 원문 보기"):
                                 st.text(result["_raw_response"])
@@ -1461,6 +1466,10 @@ with step0_tab_idea:
                         )
                     if "_error" in result:
                         st.error(f"변환 실패: {result['_error']}")
+                        if result.get("_diagnostic"):
+                            with st.expander("🔎 진단 정보", expanded=True):
+                                for _dk, _dv in result["_diagnostic"].items():
+                                    st.markdown(f"- **{_dk}**: {_dv}")
                         if "_raw_response" in result:
                             with st.expander("응답 원문 보기"):
                                 st.text(result["_raw_response"])
@@ -1574,6 +1583,10 @@ with step0_tab_creator:
                         )
                     if "_error" in result:
                         st.error(f"변환 실패: {result['_error']}")
+                        if result.get("_diagnostic"):
+                            with st.expander("🔎 진단 정보", expanded=True):
+                                for _dk, _dv in result["_diagnostic"].items():
+                                    st.markdown(f"- **{_dk}**: {_dv}")
                         if "_raw_response" in result:
                             with st.expander("응답 원문 보기"):
                                 st.text(result["_raw_response"])

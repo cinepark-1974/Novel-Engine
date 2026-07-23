@@ -473,22 +473,129 @@ def _response_text(response) -> str:
 # ─────────────────────────────────────
 # JSON 파싱
 # ─────────────────────────────────────
+def _repair_truncated_json(text: str) -> str:
+    """잘린 JSON을 복구 시도. (v3.3.3)
+
+    max_tokens 상한에 걸려 응답이 중간에 끊기면 닫는 괄호가 없어 파싱이 실패한다.
+    문자열 안쪽인지 판별하며 열린 괄호를 세고, 부족한 만큼 닫아준다.
+    마지막 미완성 항목은 잘라낸다.
+    """
+    if not text:
+        return text
+
+    stack = []          # '{' 또는 '[' 스택
+    in_str = False
+    escaped = False
+    last_safe = -1      # 마지막으로 값이 완결된 위치
+
+    for i, ch in enumerate(text):
+        if escaped:
+            escaped = False
+            continue
+        if ch == "\\":
+            escaped = True
+            continue
+        if ch == '"':
+            in_str = not in_str
+            if not in_str:
+                last_safe = i
+            continue
+        if in_str:
+            continue
+        if ch in "{[":
+            stack.append(ch)
+        elif ch in "}]":
+            if stack:
+                stack.pop()
+            last_safe = i
+        elif ch in ",":
+            last_safe = i - 1 if last_safe < 0 else last_safe
+        elif ch.isdigit() or ch in "eltruafsn.-+":
+            last_safe = i
+
+    if not stack and not in_str:
+        return text  # 잘리지 않음
+
+    body = text
+
+    # 문자열 도중에 끊겼으면 그 미완성 쌍을 통째로 버린다.
+    # 예: {"a":"완결", "b":"미완성 도중에 끊 → {"a":"완결"
+    if in_str:
+        # 마지막으로 열린 따옴표 위치를 찾아 그 앞의 쉼표까지 되돌린다
+        depth_scan_escaped = False
+        open_quote = -1
+        scan_in_str = False
+        for i, ch in enumerate(body):
+            if depth_scan_escaped:
+                depth_scan_escaped = False
+                continue
+            if ch == "\\":
+                depth_scan_escaped = True
+                continue
+            if ch == '"':
+                if not scan_in_str:
+                    open_quote = i
+                scan_in_str = not scan_in_str
+        if open_quote > 0:
+            head = body[:open_quote]
+            # 그 앞의 쉼표(또는 여는 괄호)까지 잘라낸다
+            cut = max(head.rfind(","), head.rfind("{"), head.rfind("["))
+            if cut > 0:
+                body = head[:cut] if head[cut] == "," else head[:cut + 1]
+            else:
+                body = head
+
+    # 끝에 남은 쉼표·콜론·미완성 키 제거
+    body = re.sub(r'[,:]\s*$', '', body.rstrip())
+    body = re.sub(r',\s*"[^"]*$', '', body.rstrip())
+    body = re.sub(r'[,:]\s*$', '', body.rstrip())
+
+    # 남은 괄호를 역순으로 닫는다
+    closers = {"{": "}", "[": "]"}
+    tail = "".join(closers[c] for c in reversed(stack))
+    return body + tail
+
+
 def _extract_json_from_response(text: str) -> Optional[Dict[str, Any]]:
+    """LLM 응답에서 JSON을 추출. 여러 단계로 관대하게 시도한다. (v3.3.3)"""
     if not text:
         return None
+
+    # 1) 마크다운 fence 제거
     cleaned = re.sub(r"^```(?:json)?\s*", "", text.strip(), flags=re.MULTILINE)
     cleaned = re.sub(r"```\s*$", "", cleaned.strip(), flags=re.MULTILINE)
+
+    # 2) 직접 파싱
     try:
         return json.loads(cleaned)
     except json.JSONDecodeError:
         pass
+
+    # 3) 첫 { ~ 마지막 } 구간
     start = cleaned.find("{")
     end = cleaned.rfind("}")
     if start != -1 and end != -1 and end > start:
+        candidate = cleaned[start:end + 1]
         try:
-            return json.loads(cleaned[start:end + 1])
+            return json.loads(candidate)
         except json.JSONDecodeError:
             pass
+        # 3-b) 제어문자 완화 (문자열 안 raw 개행 등)
+        try:
+            return json.loads(candidate, strict=False)
+        except json.JSONDecodeError:
+            pass
+
+    # 4) 잘린 JSON 복구 시도
+    if start != -1:
+        truncated = cleaned[start:]
+        repaired = _repair_truncated_json(truncated)
+        for parser_kw in ({}, {"strict": False}):
+            try:
+                return json.loads(repaired, **parser_kw)
+            except json.JSONDecodeError:
+                continue
+
     return None
 
 
@@ -545,7 +652,7 @@ def extract_idea_fields(
     idea_json: Dict[str, Any],
     anthropic_client,
     model: str = "claude-sonnet-5",
-    max_tokens: int = 8192,
+    max_tokens: int = 32000,
 ) -> Dict[str, Any]:
     """Idea JSON → Novel Engine STEP 1 필드 (소설화 + 미결정 엔진 제안).
 
@@ -605,14 +712,30 @@ def extract_idea_fields(
             messages=[{"role": "user", "content": prompt}],
         )
         raw_text = _response_text(response)
+        _stop_reason = getattr(response, "stop_reason", "") or ""
     except Exception as e:
         return {"_error": f"Anthropic API 호출 실패: {str(e)}"}
 
     parsed = _extract_json_from_response(raw_text)
     if parsed is None:
+        _hint = ""
+        if _stop_reason == "max_tokens":
+            _hint = (" 응답이 최대 토큰에 도달해 잘렸습니다. "
+                     "입력 자료가 매우 길 때 발생합니다.")
+        elif not raw_text.strip():
+            _hint = " 모델이 빈 응답을 반환했습니다."
+        elif "{" not in raw_text:
+            _hint = " 응답에 JSON 구조가 전혀 없습니다. 모델이 설명문만 출력했을 수 있습니다."
         return {
-            "_error": "JSON 파싱 실패. 응답에서 유효한 JSON을 찾지 못했습니다.",
-            "_raw_response": raw_text[:2000],
+            "_error": (f"JSON 파싱 실패. 응답에서 유효한 JSON을 찾지 못했습니다.{_hint}"),
+            "_raw_response": raw_text[:3000],
+            "_diagnostic": {
+                "응답_길이": f"{len(raw_text):,}자",
+                "중단_사유": _stop_reason or "(없음)",
+                "JSON_시작_포함": "{" in raw_text,
+                "JSON_종료_포함": "}" in raw_text,
+                "응답_끝_50자": raw_text[-50:] if raw_text else "(빈 응답)",
+            },
         }
 
     defaults = {

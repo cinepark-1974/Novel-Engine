@@ -1988,9 +1988,17 @@ Punch 규칙: {r['punch_rule']}
 #            · response_text() / _response_text() 헬퍼 신설 —
 #              type이 'text'인 블록만 수집해 결합 (5곳 적용)
 #            · main.py llm_call도 같은 헬퍼로 통일
-NOVEL_ENGINE_VERSION = "v3.3.2"
+# - v3.3.3 : [버그 수정] JSON 파싱 실패 해결 + 진단 강화
+#            · 원인: 긴 입력(Creator 다이제스트 3만 자 + 12 Unit 매핑) 처리 시
+#              응답이 max_tokens에 걸려 JSON이 중간에 잘림
+#            · MAX_TOKENS_EXTRACT 16000 → 32000, 추출기 기본값도 32000
+#            · _repair_truncated_json() 신설 — 잘린 JSON 자동 복구
+#              (문자열 내부 판별 + 미완성 쌍 제거 + 괄호 자동 폐합)
+#            · strict=False 폴백 추가 — 문자열 내 raw 개행 허용
+#            · 파싱 실패 시 진단 정보 출력 (응답 길이·중단 사유·JSON 유무)
+NOVEL_ENGINE_VERSION = "v3.3.3"
 NOVEL_ENGINE_BUILD_DATE = "2026-07-23"
-NOVEL_ENGINE_VERSION_TAG = "v3.3.2 / 2026-07-23 / Idea+Creator JSON-to-Novel Mode + Model & ThinkingBlock Fix"
+NOVEL_ENGINE_VERSION_TAG = "v3.3.3 / 2026-07-23 / Idea+Creator JSON-to-Novel Mode + Robust JSON Parsing"
 
 def get_novel_engine_version_info() -> str:
     """Novel Engine v3.0 메타 정보."""

@@ -515,7 +515,7 @@ def get_idea_meta(data: Dict[str, Any]) -> Dict[str, str]:
 def extract_idea_fields(
     idea_json: Dict[str, Any],
     anthropic_client,
-    model: str = "claude-sonnet-4-20250514",
+    model: str = "claude-sonnet-5",
     max_tokens: int = 8192,
 ) -> Dict[str, Any]:
     """Idea JSON → Novel Engine STEP 1 필드 (소설화 + 미결정 엔진 제안).

@@ -240,7 +240,7 @@ def _extract_json_from_response(text: str) -> Optional[Dict[str, Any]]:
 def extract_scenario_fields(
     scenario_text: str,
     anthropic_client,
-    model: str = "claude-sonnet-4-20250514",
+    model: str = "claude-sonnet-5",
     max_tokens: int = 8192,
 ) -> Dict[str, Any]:
     """시나리오 텍스트 → Novel Engine 입력 필드 자동 추출.

@@ -512,7 +512,7 @@ def get_creator_meta(data: Dict[str, Any]) -> Dict[str, str]:
 def extract_creator_fields(
     creator_json: Dict[str, Any],
     anthropic_client,
-    model: str = "claude-sonnet-4-20250514",
+    model: str = "claude-sonnet-5",
     max_tokens: int = 8192,
 ) -> Dict[str, Any]:
     """Creator JSON → Novel Engine STEP 1 필드 (소설화 번역).

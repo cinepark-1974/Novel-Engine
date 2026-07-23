@@ -1975,9 +1975,15 @@ Punch 규칙: {r['punch_rule']}
 #            · 미결정 항목(locked_creator_questions)을 엔진 제안으로 자동 충전
 #              단, [엔진 제안 — 작가 확정 필요] 표식 강제 → 확정/제안 구분 보장
 #            · 미결정 목록을 STEP 0·STEP 1 양쪽에 표시해 검토 지점 명시
-NOVEL_ENGINE_VERSION = "v3.3.0"
+# - v3.3.1 : [버그 수정] 만료 모델명으로 인한 API 404 해결
+#            · claude-sonnet-4-20250514 → claude-sonnet-5 (7곳)
+#            · claude-opus-4-20250514  → claude-opus-4-8
+#            · MAX_TOKENS_EXTRACT=16000 신설 — 추출 JSON 잘림 방지
+#              (신모델 최대 출력 128k. 본문 집필 토큰은 기존 유지)
+#            · 사이드바에 사용 모델명 표시 — 모델 변경 시 즉시 진단 가능
+NOVEL_ENGINE_VERSION = "v3.3.1"
 NOVEL_ENGINE_BUILD_DATE = "2026-07-23"
-NOVEL_ENGINE_VERSION_TAG = "v3.3.0 / 2026-07-23 / Idea+Creator JSON-to-Novel Mode + Scenario Mode + v3.0 All Modules"
+NOVEL_ENGINE_VERSION_TAG = "v3.3.1 / 2026-07-23 / Idea+Creator JSON-to-Novel Mode + Model Fix (Sonnet 5 / Opus 4.8)"
 
 def get_novel_engine_version_info() -> str:
     """Novel Engine v3.0 메타 정보."""

@@ -110,11 +110,16 @@ except ImportError:
 APP_TITLE = "NOVEL ENGINE"
 APP_SUB = "NOVEL WRITER STUDIO v3.0"
 
-DEFAULT_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
-MODEL_OPUS = os.getenv("ANTHROPIC_MODEL_OPUS", "claude-opus-4-20250514")
+DEFAULT_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5")
+MODEL_OPUS = os.getenv("ANTHROPIC_MODEL_OPUS", "claude-opus-4-8")
 MAX_TOKENS_SHORT = 4000
 MAX_TOKENS_MID = 6000
 MAX_TOKENS_LONG = 8192
+# v3.3.1 — JSON 구조 추출 전용 상한.
+# Creator/Idea 다이제스트가 3만 자를 넘고 12 Unit 매핑까지 한 번에 뽑아야 해서
+# 8192로는 JSON이 중간에 잘릴 수 있다. 신모델(Sonnet 5 / Opus 4.8)은
+# 최대 출력 128k를 지원하므로 추출 단계만 상향한다.
+MAX_TOKENS_EXTRACT = 16000
 
 # v3.0 M1: BJND Scene Enforcer 임계치 (사전 차단 + 자동 재생성 트리거)
 BJND_THRESHOLDS = {
@@ -693,7 +698,7 @@ def generate_unit_summary(unit_no: int, text: str) -> str:
         return ""
     try:
         resp = client.messages.create(
-            model=os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-20250514"),
+            model=os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5"),
             max_tokens=200,
             messages=[{
                 "role": "user",
@@ -732,7 +737,7 @@ def extract_characters_from_text(text: str) -> str:
         return ""
     try:
         resp = client.messages.create(
-            model=os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-20250514"),
+            model=os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5"),
             max_tokens=300,
             messages=[{
                 "role": "user",
@@ -1159,12 +1164,25 @@ render_status()
 with st.sidebar:
     st.markdown(f"### 👖 Novel Engine {NOVEL_ENGINE_VERSION}")
     st.caption(f"Build {NOVEL_ENGINE_BUILD_DATE}")
+    st.caption(f"분석 {DEFAULT_MODEL} · 집필 {MODEL_OPUS}")
 
-    # v3.1 시나리오 모드 상태
+    # 소설화 모드 상태 (출처별 구분)
     if st.session_state.get("scenario_fields_applied"):
-        st.success("📄 시나리오 소설화 모드 활성")
-        stats = st.session_state.get("scenario_stats", {})
-        st.caption(f"원작: {stats.get('char_count', 0):,}자 · {stats.get('scene_count', 0)}씬")
+        _sb_ex = st.session_state.get("scenario_extracted", {})
+        _sb_src = _sb_ex.get("_source", "")
+        if _sb_src == "creator_engine":
+            st.success("🌱 Creator 기획 소설화 모드")
+            st.caption(f"원작: {_sb_ex.get('_source_title', '')} ({_sb_ex.get('_source_format', '')})")
+        elif _sb_src == "idea_engine":
+            st.success("💡 Idea 기획 소설화 모드")
+            st.caption(f"원작: {_sb_ex.get('_source_title', '')} ({_sb_ex.get('_source_format', '')})")
+            _sb_pend = _sb_ex.get("_pending_items", [])
+            if _sb_pend:
+                st.caption(f"⚠️ 엔진 제안 {len(_sb_pend)}건 — 작가 확정 필요")
+        else:
+            st.success("📄 시나리오 소설화 모드 활성")
+            stats = st.session_state.get("scenario_stats", {})
+            st.caption(f"원작: {stats.get('char_count', 0):,}자 · {stats.get('scene_count', 0)}씬")
 
     st.markdown("---")
     st.markdown("**v3.1 신규**")
@@ -1291,7 +1309,7 @@ with step0_tab_scenario:
                             scenario_text=st.session_state["scenario_text"],
                             anthropic_client=client,
                             model=DEFAULT_MODEL,
-                            max_tokens=MAX_TOKENS_LONG,
+                            max_tokens=MAX_TOKENS_EXTRACT,
                         )
                     if "_error" in result:
                         st.error(f"추출 실패: {result['_error']}")
@@ -1420,7 +1438,7 @@ with step0_tab_idea:
                             idea_json=st.session_state["idea_json_data"],
                             anthropic_client=client,
                             model=DEFAULT_MODEL,
-                            max_tokens=MAX_TOKENS_LONG,
+                            max_tokens=MAX_TOKENS_EXTRACT,
                         )
                     if "_error" in result:
                         st.error(f"변환 실패: {result['_error']}")
@@ -1533,7 +1551,7 @@ with step0_tab_creator:
                             creator_json=st.session_state["creator_json_data"],
                             anthropic_client=client,
                             model=DEFAULT_MODEL,
-                            max_tokens=MAX_TOKENS_LONG,
+                            max_tokens=MAX_TOKENS_EXTRACT,
                         )
                     if "_error" in result:
                         st.error(f"변환 실패: {result['_error']}")

@@ -1,5 +1,7 @@
 import os
 import re
+import json
+from datetime import datetime
 from io import BytesIO
 from typing import Optional, List
 
@@ -112,9 +114,17 @@ APP_SUB = "NOVEL WRITER STUDIO v3.0"
 
 DEFAULT_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5")
 MODEL_OPUS = os.getenv("ANTHROPIC_MODEL_OPUS", "claude-opus-4-8")
-MAX_TOKENS_SHORT = 4000
-MAX_TOKENS_MID = 6000
-MAX_TOKENS_LONG = 8192
+# v3.4.2 — 토큰 상한 재정비.
+# 구모델(8192 상한) 기준으로 잡혀 있던 값들이 신모델(Sonnet 5 / Opus 4.8,
+# 최대 출력 128k)에서 오히려 결과를 잘라먹는 원인이 됐다.
+# 실제 사고: 입력 자료가 풍부한 작품에서 STEP 2·3·4 결과가 문장 중간에 끊김
+# ("기태의 위협 방식(스토킹" 에서 종료되는 식).
+MAX_TOKENS_SHORT = 4000       # 짧은 회신 (제목 검토 등)
+MAX_TOKENS_MID = 6000         # 중간 길이 (레거시 유지 — 참조하는 곳 남아있음)
+MAX_TOKENS_LONG = 16000       # Unit 본문 집필
+MAX_TOKENS_ANALYSIS = 16000   # STEP 2 분석·진단 리포트
+MAX_TOKENS_DESIGN = 20000     # STEP 3 기승전결 보강, STEP 4 Unit 설계
+MAX_TOKENS_EXTRACT = 32000    # STEP 0 JSON 추출 (가장 긴 출력)
 # v3.3.1 — JSON 구조 추출 전용 상한.
 # Creator/Idea 다이제스트가 3만 자를 넘고 12 Unit 매핑까지 한 번에 뽑아야 해서
 # 8192로는 JSON이 중간에 잘릴 수 있다. 신모델(Sonnet 5 / Opus 4.8)은
@@ -398,7 +408,32 @@ DEFAULT_STATE = {
     "idea_json_data": {},          # 업로드된 Idea JSON 원본 (dict)
     "idea_json_meta": {},          # UI 미리보기용 메타
     "idea_pending_items": [],      # 미결정 항목 목록
+    # v3.4 STEP 1 입력 필드 — 세션 보존 + 프로젝트 저장 대상
+    # (기존에는 위젯 지역변수로만 존재해 저장·복원이 불가능했다)
+    "f_working_title": "",
+    "f_genre": "",
+    "f_format_mode": "장편소설",
+    "f_pov": "3인칭 제한",
+    "f_target_length": "",
+    "f_style_strength": "중",
+    "f_overview": "",
+    "f_characters": "",
+    "f_synopsis": "",
+    "f_notes": "",
+    "f_style_sample": "",
+    "f_profession_protagonist": "",
+    "f_profession_antagonist": "",
+    "f_period_mode": "현대 (시대 주입 없음)",
+    "f_period_labels": [],
+    "f_locked_text": "",
+    "f_open_text": "",
 }
+
+# 저장/불러오기 보조 키 (프로젝트 저장 대상 아님 — DEFAULT_STATE 밖)
+if "_last_loaded_project" not in st.session_state:
+    st.session_state["_last_loaded_project"] = ""
+if "_last_truncated" not in st.session_state:
+    st.session_state["_last_truncated"] = False
 
 for k, v in DEFAULT_STATE.items():
     if k not in st.session_state:
@@ -407,11 +442,161 @@ for k, v in DEFAULT_STATE.items():
 # ─────────────────────────────────────
 # HELPERS
 # ─────────────────────────────────────
+def apply_extracted_to_fields(ex: dict) -> None:
+    """추출 결과(scenario/creator/idea)를 STEP 1 위젯 세션 키에 직접 반영. (v3.4)
+
+    위젯이 key 방식으로 바뀌면서 value= 인자를 쓸 수 없게 됐다.
+    (key와 value를 함께 쓰면 재실행 시 session_state가 우선해 추출값이 무시된다)
+    따라서 변환 직후 이 함수로 세션 값을 직접 채운 뒤 rerun 한다.
+    """
+    if not isinstance(ex, dict):
+        return
+    mapping = {
+        "f_working_title": (ex.get("logline") or "")[:30],
+        "f_genre": ex.get("genre") or "",
+        "f_overview": ex.get("overview") or "",
+        "f_characters": ex.get("characters") or "",
+        "f_synopsis": ex.get("synopsis") or "",
+        "f_notes": ex.get("notes") or "",
+        "f_profession_protagonist": ex.get("profession_protagonist") or "",
+        "f_profession_antagonist": ex.get("profession_antagonist") or "",
+        "f_locked_text": ex.get("locked_text") or "",
+        "f_open_text": ex.get("open_text") or "",
+    }
+    for k, v in mapping.items():
+        if v:
+            st.session_state[k] = v
+
+    # 시대 키 → 수동 선택 모드 + 라벨 반영
+    pk = ex.get("period_keys") or []
+    if pk and PERIOD_KEYS:
+        labels = []
+        for key in pk[:2]:
+            if key in PERIOD_KEYS:
+                labels.append(f"{key} · {get_period_label(key)}")
+        if labels:
+            st.session_state["f_period_mode"] = "수동 선택"
+            st.session_state["f_period_labels"] = labels
+
+
+# 프로젝트 저장 대상 키 — DEFAULT_STATE 전체를 저장한다.
+# 저장에서 제외할 일시적 키만 명시한다.
+_SAVE_EXCLUDE_KEYS = {
+    "status_message",
+    "status_type",
+}
+
+
+def build_project_snapshot() -> dict:
+    """현재 작업 상태 전체를 저장용 dict로 만든다. (v3.4)
+
+    사고 패턴 B(통합본 동기화 사고) 방지 — 캐시가 아니라
+    session_state의 최신 값을 직접 참조한다.
+    """
+    data = {}
+    for k in DEFAULT_STATE.keys():
+        if k in _SAVE_EXCLUDE_KEYS:
+            continue
+        data[k] = st.session_state.get(k, DEFAULT_STATE[k])
+
+    # 저장 시점 메타
+    _ex = st.session_state.get("scenario_extracted", {}) or {}
+    return {
+        "_novel_engine": {
+            "engine": "Novel Engine",
+            "version": NOVEL_ENGINE_VERSION,
+            "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "title": st.session_state.get("f_working_title", "") or "(제목 미정)",
+            "source": _ex.get("_source", "manual"),
+            "source_title": _ex.get("_source_title", ""),
+        },
+        "state": data,
+    }
+
+
+def restore_project_snapshot(payload: dict) -> tuple:
+    """저장된 프로젝트를 session_state에 복원한다. (v3.4)
+
+    Returns:
+        (성공여부, 메시지, 메타dict)
+    """
+    if not isinstance(payload, dict):
+        return False, "파일 형식이 올바르지 않습니다.", {}
+
+    meta = payload.get("_novel_engine", {})
+    state = payload.get("state")
+    if not isinstance(state, dict):
+        return False, (
+            "Novel Engine 프로젝트 파일이 아닙니다. "
+            "Creator/Idea JSON이라면 STEP 0의 해당 탭을 사용하세요."
+        ), {}
+
+    restored, skipped = 0, 0
+    for k, default in DEFAULT_STATE.items():
+        if k in _SAVE_EXCLUDE_KEYS:
+            continue
+        if k not in state:
+            skipped += 1
+            continue
+        v = state[k]
+        # 타입이 크게 어긋나면 기본값 유지 (구버전 파일 호환)
+        if default is not None and v is not None:
+            if isinstance(default, dict) and not isinstance(v, dict):
+                skipped += 1
+                continue
+            if isinstance(default, list) and not isinstance(v, list):
+                skipped += 1
+                continue
+            if isinstance(default, bool) and not isinstance(v, bool):
+                skipped += 1
+                continue
+        st.session_state[k] = v
+        restored += 1
+
+    msg = f"{restored}개 항목 복원"
+    if skipped:
+        msg += f" ({skipped}개는 구버전/형식 불일치로 기본값 유지)"
+    return True, msg, meta
+
+
+def count_written_units() -> int:
+    """실제 원고가 있는 Unit 수."""
+    drafts = st.session_state.get("unit_drafts", {}) or {}
+    return sum(1 for v in drafts.values() if isinstance(v, str) and v.strip())
+
+
 def get_client() -> Optional["anthropic.Anthropic"]:
     api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
     if not api_key or anthropic is None:
         return None
     return anthropic.Anthropic(api_key=api_key)
+
+
+def looks_truncated(text: str) -> bool:
+    """결과가 문장 중간에서 끊겼는지 판정한다. (v3.4.2)
+
+    stop_reason을 받지 못하는 경로도 있으므로 텍스트 자체로도 확인한다.
+    한국어 산문 기준으로 정상 종료는 보통 마침표·물음표·느낌표·따옴표·
+    목록기호 등으로 끝난다.
+    """
+    if not text:
+        return False
+    tail = text.rstrip()
+    if not tail:
+        return False
+    # 정상 종료로 볼 수 있는 마지막 글자
+    ok_endings = ('.', '!', '?', '"', "'", '”', '’', ')', ']', '}',
+                  '다', '음', '함', '임', '것', '요', '⟩', '>', '…', '—', ':', '·')
+    if tail.endswith(ok_endings):
+        return False
+    # 목록/표/헤딩 줄로 끝나면 구조적 종료로 보고 정상 처리
+    last_line = tail.split('\n')[-1].strip()
+    if last_line.startswith(('#', '-', '*', '|', '>', '•')):
+        return False
+    # 숫자 목록 (1. 2. ①② 등)
+    if re.match(r'^\s*(\d+[.)]|[①-⑳])', last_line):
+        return False
+    return True
 
 
 def response_text(response) -> str:
@@ -453,6 +638,8 @@ def llm_call(user_prompt: str, max_tokens: int = MAX_TOKENS_MID, use_opus: bool 
     # max_tokens가 크면 SDK가 non-streaming 호출을 거부한다
     # ('Streaming is required for operations that may take longer than 10 minutes').
     # 본문 집필도 장문이라 스트리밍으로 통일한다.
+    result_text = ""
+    stop_reason = ""
     try:
         parts = []
         with client.messages.stream(
@@ -463,21 +650,44 @@ def llm_call(user_prompt: str, max_tokens: int = MAX_TOKENS_MID, use_opus: bool 
         ) as stream:
             for chunk in stream.text_stream:
                 parts.append(chunk)
+            final = stream.get_final_message()
+            stop_reason = getattr(final, "stop_reason", "") or ""
             joined = "".join(parts).strip()
-            if joined:
-                return joined
-            return response_text(stream.get_final_message())
+            result_text = joined if joined else response_text(final)
     except (AttributeError, TypeError):
-        pass  # 구버전 SDK 폴백
+        # 구버전 SDK 폴백
+        response = client.messages.create(
+            model=model,
+            max_tokens=max_tokens,
+            system=SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        result_text = response_text(response)
+        stop_reason = getattr(response, "stop_reason", "") or ""
 
-    response = client.messages.create(
-        model=model,
-        max_tokens=max_tokens,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_prompt}],
-    )
+    # v3.4.1 — 빈 응답을 조용히 통과시키지 않는다.
+    # 예전에는 ""를 그대로 반환해 "완료" 메시지만 뜨고 내용은 비는
+    # 사고가 났다(설계·원고가 저장은 됐는데 화면에 안 보임).
+    if not (result_text or "").strip():
+        raise RuntimeError(
+            "모델이 빈 응답을 반환했습니다. 잠시 후 다시 시도하거나, "
+            "입력 자료가 너무 길지 않은지 확인하세요."
+        )
 
-    return response_text(response)
+    # v3.4.2 — 잘림 감지.
+    # 토큰 상한에 걸려 문장 중간에서 끊긴 결과를 작가가 눈으로 발견할 때까지
+    # 모르는 사고가 있었다. 이제 즉시 경고를 띄운다.
+    if stop_reason == "max_tokens":
+        st.session_state["_last_truncated"] = True
+        st.warning(
+            f"⚠️ 응답이 최대 길이({max_tokens:,} 토큰)에 도달해 **끝부분이 잘렸습니다.** "
+            "결과 마지막이 문장 중간에서 끝났는지 확인하세요. "
+            "입력 자료(작품 개요·캐릭터·줄거리)를 줄이거나 다시 시도하면 개선될 수 있습니다."
+        )
+    else:
+        st.session_state["_last_truncated"] = False
+
+    return result_text
 
 
 def merge_nonempty(parts: List[str], sep: str = "\n\n") -> str:
@@ -1149,6 +1359,20 @@ def run_with_status(start_message: str, done_message: str, fn):
     with st.spinner(start_message):
         try:
             result = fn()
+            # v3.4.2 — 결과가 문장 중간에서 끊겼으면 완료로 처리하지 않는다.
+            if isinstance(result, str) and looks_truncated(result):
+                set_status(
+                    "결과가 중간에서 끊겼습니다. 저장은 됐지만 끝부분을 확인하고 "
+                    "필요하면 다시 생성하세요.",
+                    "error",
+                )
+                st.warning(
+                    "⚠️ **생성 결과가 문장 중간에서 끝났습니다.** "
+                    f"마지막 부분: `…{result.rstrip()[-40:]}`  \n"
+                    "토큰 상한에 걸렸을 가능성이 큽니다. 다시 생성하거나, "
+                    "STEP 1의 입력 자료를 조금 줄여보세요."
+                )
+                return result
             set_status(done_message, "success")
             return result
         except Exception as e:
@@ -1208,6 +1432,13 @@ with st.sidebar:
     st.caption(f"Build {NOVEL_ENGINE_BUILD_DATE}")
     st.caption(f"분석 {DEFAULT_MODEL} · 집필 {MODEL_OPUS}")
 
+    # v3.4 작업 현황 + 저장 상기
+    _sb_units = count_written_units()
+    if _sb_units:
+        st.markdown("---")
+        st.markdown(f"**📝 Unit 원고 {_sb_units}개 작성됨**")
+        st.caption("브라우저를 닫기 전에 상단 '프로젝트 저장'으로 백업하세요.")
+
     # 소설화 모드 상태 (출처별 구분)
     if st.session_state.get("scenario_fields_applied"):
         _sb_ex = st.session_state.get("scenario_extracted", {})
@@ -1263,6 +1494,90 @@ with st.sidebar:
 """
     )
     st.caption("임계치 초과 시 자동 재생성 1회")
+
+# ─────────────────────────────────────
+# v3.4 프로젝트 저장 / 불러오기
+# ─────────────────────────────────────
+_snap_units = count_written_units()
+_snap_title = st.session_state.get("f_working_title", "").strip()
+_has_work = bool(
+    _snap_title
+    or st.session_state.get("f_overview", "").strip()
+    or _snap_units
+    or st.session_state.get("scenario_fields_applied")
+)
+
+with st.expander(
+    "💾 프로젝트 저장 / 불러오기"
+    + (f"  —  {_snap_title or '제목 미정'} · Unit {_snap_units}개 작성됨" if _has_work else ""),
+    expanded=not _has_work,
+):
+    st.caption(
+        "작업 중인 모든 내용(STEP 1 자료·문체 분석·기승전결 보강·Unit 설계·Unit 원고)을 "
+        "JSON 파일 하나로 저장하고 다시 불러옵니다. 브라우저를 닫아도 파일만 있으면 이어서 작업할 수 있습니다."
+    )
+
+    save_col, load_col = st.columns([1, 1])
+
+    with save_col:
+        st.markdown("**저장**")
+        if _has_work:
+            _payload = build_project_snapshot()
+            _json_str = json.dumps(_payload, ensure_ascii=False, indent=2)
+            _safe_title = re.sub(r'[\\\\/:*?"<>|]', "_", _snap_title or "novel")[:40]
+            _fname = f"{_safe_title}_novelengine_{datetime.now().strftime('%Y%m%d_%H%M')}.json"
+            st.download_button(
+                "💾 프로젝트 저장 (JSON 다운로드)",
+                data=_json_str.encode("utf-8"),
+                file_name=_fname,
+                mime="application/json",
+                use_container_width=True,
+                type="primary",
+            )
+            st.caption(
+                f"저장 내용: STEP 1 자료 · Unit 원고 {_snap_units}개 · "
+                f"설계/분석 결과 · 파일 크기 약 {len(_json_str) // 1024:,}KB"
+            )
+        else:
+            st.button(
+                "💾 프로젝트 저장 (JSON 다운로드)",
+                use_container_width=True,
+                disabled=True,
+                help="저장할 작업 내용이 없습니다. STEP 1 입력 또는 원작 불러오기 후 사용하세요.",
+            )
+            st.caption("아직 저장할 내용이 없습니다.")
+
+    with load_col:
+        st.markdown("**불러오기**")
+        _proj_file = st.file_uploader(
+            "저장된 프로젝트 JSON 업로드",
+            type=["json"],
+            key="project_load_upload",
+            label_visibility="collapsed",
+        )
+        if _proj_file is not None:
+            _key = f"{_proj_file.name}_{_proj_file.size}"
+            if st.session_state.get("_last_loaded_project") != _key:
+                if st.button("📂 이 파일로 불러오기", use_container_width=True, type="primary"):
+                    try:
+                        _raw = _proj_file.read().decode("utf-8")
+                        _payload_in = json.loads(_raw)
+                    except Exception as e:
+                        st.error(f"파일을 읽지 못했습니다: {e}")
+                    else:
+                        ok, msg, meta = restore_project_snapshot(_payload_in)
+                        if not ok:
+                            st.error(msg)
+                        else:
+                            st.session_state["_last_loaded_project"] = _key
+                            st.success(
+                                f"✅ 불러오기 완료 — {meta.get('title', '(제목 미정)')} "
+                                f"(저장 시각 {meta.get('saved_at', '-')}, {msg})"
+                            )
+                            st.rerun()
+            else:
+                st.info("이미 불러온 파일입니다. 다른 파일을 선택하면 다시 불러올 수 있습니다.")
+        st.caption("불러오면 현재 작업 내용은 덮어써집니다. 필요하면 먼저 저장하세요.")
 
 # ─────────────────────────────────────
 # v3.1 STEP 0 · 시나리오 업로드 (선택)
@@ -1367,6 +1682,7 @@ with step0_tab_scenario:
                         mapping_text = build_unit_mapping_text(result.get("unit_mapping", []))
                         st.session_state["scenario_mapping_text"] = mapping_text
                         st.session_state["scenario_fields_applied"] = True
+                        apply_extracted_to_fields(result)
                         st.success(
                             "✅ 추출 완료. STEP 1 필드가 자동 입력되었고, STEP 4 Unit 설계 시 매핑 가이드가 자동 주입됩니다. "
                             "필요하면 STEP 1에서 수정하세요."
@@ -1500,6 +1816,7 @@ with step0_tab_idea:
                         mapping_text = build_unit_mapping_text(result.get("unit_mapping", []))
                         st.session_state["scenario_mapping_text"] = mapping_text
                         st.session_state["scenario_fields_applied"] = True
+                        apply_extracted_to_fields(result)
                         st.success(
                             "✅ 소설화 변환 완료. STEP 1 필드가 자동 입력되었습니다. "
                             "[엔진 제안 — 작가 확정 필요] 표식이 붙은 항목을 우선 검토하세요."
@@ -1617,6 +1934,7 @@ with step0_tab_creator:
                         mapping_text = build_unit_mapping_text(result.get("unit_mapping", []))
                         st.session_state["scenario_mapping_text"] = mapping_text
                         st.session_state["scenario_fields_applied"] = True
+                        apply_extracted_to_fields(result)
                         st.success(
                             "✅ 소설화 변환 완료. STEP 1 필드가 자동 입력되었고, "
                             "STEP 4 Unit 설계 시 매핑 가이드가 자동 주입됩니다. "
@@ -1690,52 +2008,62 @@ col1, col2 = st.columns([1, 1])
 with col1:
     working_title = st.text_input(
         "현재 가제",
-        value=_ex.get("logline", "")[:30] if _ex else "",
+        key="f_working_title",
         placeholder="예: 감각구역 / 머지 앤 어퀴지션 / 검은 항구",
     )
     genre = st.text_input(
         "장르",
-        value=_ex.get("genre", "") if _ex else "",
+        key="f_genre",
         placeholder="예: 스릴러, 역사드라마, 금융 스릴러, 첩보물",
     )
-    format_mode = st.selectbox("형식", ["장편소설", "웹소설", "하이브리드"], index=0)
+    format_mode = st.selectbox(
+        "형식", ["장편소설", "웹소설", "하이브리드"], key="f_format_mode"
+    )
 
 with col2:
-    pov = st.selectbox("시점", ["3인칭 제한", "1인칭", "듀얼 POV", "다중시점"], index=0)
-    target_length = st.text_input("목표 분량", placeholder="예: 12만자 / 12 Units / Unit당 1만자")
-    style_strength = st.selectbox("문체 반영 강도", ["약", "중", "강"], index=1)
+    pov = st.selectbox(
+        "시점", ["3인칭 제한", "1인칭", "듀얼 POV", "다중시점"], key="f_pov"
+    )
+    target_length = st.text_input(
+        "목표 분량", key="f_target_length",
+        placeholder="예: 12만자 / 12 Units / Unit당 1만자",
+    )
+    style_strength = st.selectbox(
+        "문체 반영 강도", ["약", "중", "강"], key="f_style_strength"
+    )
 
 overview = st.text_area(
     "작품 개요",
     height=220,
-    value=_ex.get("overview", "") if _ex else "",
+    key="f_overview",
     placeholder="로그라인, 기획의도, 세계관, 장르 톤, 작품의 핵심 질문, 차별점",
 )
 
 characters = st.text_area(
     "캐릭터",
     height=220,
-    value=_ex.get("characters", "") if _ex else "",
+    key="f_characters",
     placeholder="주인공 / 적대자 / 조력자 / 핵심 관계, 각 인물의 욕망 / 결핍 / 비밀 / 변화",
 )
 
 synopsis = st.text_area(
     "줄거리 / 트리트먼트",
     height=260,
-    value=_ex.get("synopsis", "") if _ex else "",
+    key="f_synopsis",
     placeholder="시작, 중반, 위기, 클라이맥스, 엔딩 방향, 반드시 살릴 사건",
 )
 
 notes = st.text_area(
     "추가 메모 (선택)",
     height=180,
-    value=_ex.get("notes", "") if _ex else "",
+    key="f_notes",
     placeholder="약한 부분, 반드시 살릴 장면, 정보 레이어, 역사 고증 메모, 참고 톤",
 )
 
 style_sample = st.text_area(
     "문체 샘플 (선택)",
     height=220,
+    key="f_style_sample",
     placeholder="Mr.MOON이 직접 쓴 소설/산문/블로그 문장 일부",
 )
 
@@ -1756,7 +2084,7 @@ prof_col1, prof_col2 = st.columns([1, 1])
 with prof_col1:
     profession_protagonist = st.text_input(
         "주인공 직업 (M5)",
-        value=_ex.get("profession_protagonist", "") if _ex else "",
+        key="f_profession_protagonist",
         placeholder="예: M&A 변호사 / 강력계 형사 / 오너 셰프 / 투자은행 VP / 군의관",
         help="Profession Pack이 자동 감지하여 전문 용어·공간·일상·스트레스를 주입합니다.",
     )
@@ -1764,7 +2092,7 @@ with prof_col1:
 with prof_col2:
     profession_antagonist = st.text_input(
         "주요 조연/적대자 직업 (M5, 선택)",
-        value=_ex.get("profession_antagonist", "") if _ex else "",
+        key="f_profession_antagonist",
         placeholder="예: 검사 / 조직폭력 보스 / 기자 / 로비스트",
         help="주인공과 다른 직업이면 추가 주입. 같으면 중복 방지.",
     )
@@ -1776,7 +2104,7 @@ with period_col1:
     period_mode = st.radio(
         "시대 모드 (M9)",
         ["현대 (시대 주입 없음)", "자동 감지 (LOCKED에서)", "수동 선택"],
-        index=0,
+        key="f_period_mode",
         help="역사소설이 아니면 '현대'를 유지하세요. 자동 감지는 LOCKED 블록의 연도·인물·사건 키워드를 스캔합니다.",
     )
 
@@ -1785,21 +2113,22 @@ with period_col2:
     if period_mode == "수동 선택" and PERIOD_KEYS:
         # 한국어 라벨로 표시하되 내부 키로 저장
         period_options = [f"{k} · {get_period_label(k)}" for k in PERIOD_KEYS]
-        # v3.1: 추출된 시대 키를 기본값으로
-        default_labels = []
-        if _ex and _ex.get("period_keys"):
-            for k in _ex["period_keys"][:2]:
-                if k in PERIOD_KEYS:
-                    default_labels.append(f"{k} · {get_period_label(k)}")
+        # 저장된 라벨 중 현재 옵션에 존재하는 것만 유지 (불러오기 안전)
+        _saved_labels = [
+            x for x in st.session_state.get("f_period_labels", [])
+            if x in period_options
+        ]
+        if _saved_labels != st.session_state.get("f_period_labels", []):
+            st.session_state["f_period_labels"] = _saved_labels
         selected_labels = st.multiselect(
             "시대 선택 (최대 2개, 다중 시대 교차 전개 시 2개)",
             period_options,
-            default=default_labels,
+            key="f_period_labels",
             max_selections=2,
             help="일제강점기 + 현대, 구한말 + 일제강점기 등 교차 전개도 가능.",
         )
         # label에서 키만 추출
-        period_keys_selected = [s.split(" · ")[0] for s in selected_labels]
+        period_keys_selected = [x.split(" · ")[0] for x in selected_labels]
     elif period_mode == "자동 감지 (LOCKED에서)":
         st.caption("ℹ️ LOCKED 블록 입력 후 Unit 생성 시 자동 감지됩니다.")
 
@@ -1809,7 +2138,7 @@ with lock_col1:
     locked_text = st.text_area(
         "🔒 LOCKED 설정 (절대 변경 불가)",
         height=180,
-        value=_ex.get("locked_text", "") if _ex else "",
+        key="f_locked_text",
         placeholder="변경 금지 항목을 줄 단위로 입력\n예:\n- 한유진: QLCP 대표. 직책 변경 금지.\n- 마이클 모건: 적대자. 동맹으로 변경 금지.\n- 기획의도: 글로벌 금융 권력 비판이 테마에 반영되어야 함.",
     )
 
@@ -1817,7 +2146,7 @@ with lock_col2:
     open_text = st.text_area(
         "🔓 OPEN 설정 (창작 가능 범위)",
         height=180,
-        value=_ex.get("open_text", "") if _ex else "",
+        key="f_open_text",
         placeholder="자유롭게 창작 가능한 항목\n예:\n- 캐릭터 외형, 습관, 말투 디테일은 자유롭게 확장 가능.\n- 장면별 감정 변화와 감각 묘사는 자유롭게 창작 가능.",
     )
 
@@ -1860,9 +2189,9 @@ with c1:
     if st.button("문체 샘플 분석", type="primary", use_container_width=True):
         def _job():
             prompt = STYLE_DNA_ANALYSIS_PROMPT.format(style_sample=style_sample or "샘플 없음")
-            return llm_call(prompt, max_tokens=MAX_TOKENS_SHORT)
+            return llm_call(prompt, max_tokens=MAX_TOKENS_ANALYSIS)
         result = run_with_status("문체 샘플을 분석 중입니다...", "문체 샘플 분석이 완료되었습니다.", _job)
-        if result is not None:
+        if result:  # v3.4.1 — 빈 문자열도 저장하지 않는다
             st.session_state["style_dna"] = result
 
 with c2:
@@ -1882,9 +2211,9 @@ with c2:
                 style_strength=style_strength,
                 locked_block=locked_block,
             )
-            return llm_call(prompt, max_tokens=MAX_TOKENS_MID)
+            return llm_call(prompt, max_tokens=MAX_TOKENS_ANALYSIS)
         result = run_with_status("기획서 통합 분석 중입니다...", "기획서 통합 분석이 완료되었습니다.", _job)
-        if result is not None:
+        if result:  # v3.4.1 — 빈 문자열도 저장하지 않는다
             st.session_state["merged_analysis"] = result
 
 with c3:
@@ -1900,9 +2229,9 @@ with c3:
                 style_dna=st.session_state["style_dna"],
                 locked_block=locked_block,
             )
-            return llm_call(prompt, max_tokens=MAX_TOKENS_MID)
+            return llm_call(prompt, max_tokens=MAX_TOKENS_ANALYSIS)
         result = run_with_status("부족한 점을 진단 중입니다...", "부족한 점 진단이 완료되었습니다.", _job)
-        if result is not None:
+        if result:  # v3.4.1 — 빈 문자열도 저장하지 않는다
             st.session_state["gap_diagnosis"] = result
 
 if st.session_state["style_dna"]:
@@ -1939,14 +2268,14 @@ def reinforce_segment(segment_name: str):
             style_dna=st.session_state["style_dna"],
             locked_block=locked_block,
         )
-        return llm_call(prompt, max_tokens=MAX_TOKENS_MID)
+        return llm_call(prompt, max_tokens=MAX_TOKENS_DESIGN)
 
     result = run_with_status(
         f"{segment_name} 구간을 장편소설 구조로 보강 중입니다...",
         f"{segment_name} 구간 보강이 완료되었습니다.",
         _job,
     )
-    if result is not None:
+    if result:  # v3.4.1 — 빈 문자열도 저장하지 않는다
         st.session_state["story_reinforcement"][segment_name] = result
         get_story_reinforcement_text()
 
@@ -2000,14 +2329,14 @@ def build_blueprint(group_key: str):
             # v3.1 신규: 시나리오 소설화 매핑 가이드
             scenario_mapping=st.session_state.get("scenario_mapping_text", ""),
         )
-        return llm_call(prompt, max_tokens=MAX_TOKENS_MID)
+        return llm_call(prompt, max_tokens=MAX_TOKENS_DESIGN)
 
     result = run_with_status(
         f"UNIT {group_key} 설계를 생성 중입니다...",
         f"UNIT {group_key} 설계가 완료되었습니다.",
         _job,
     )
-    if result is not None:
+    if result:  # v3.4.1 — 빈 문자열도 저장하지 않는다
         st.session_state["unit_blueprints"][group_key] = result
 
 buttons = [
@@ -2071,9 +2400,9 @@ if selected_unit == "01":
                     profession_text=profession_text_combined,
                     period_keys=active_period_keys,
                 )
-                return llm_call(prompt, max_tokens=MAX_TOKENS_MID, use_opus=True)
+                return llm_call(prompt, max_tokens=MAX_TOKENS_LONG, use_opus=True)
             result = run_with_status("Stage A: PEAK 오프닝을 생성 중입니다...", "Stage A 생성 완료.", _job)
-            if result is not None:
+            if result:  # v3.4.1 — 빈 문자열도 저장하지 않는다
                 st.session_state["ch1_stage_a"] = result
 
     with ch1_b:
@@ -2093,9 +2422,9 @@ if selected_unit == "01":
                     profession_text=profession_text_combined,
                     period_keys=active_period_keys,
                 )
-                return llm_call(prompt, max_tokens=MAX_TOKENS_MID, use_opus=True)
+                return llm_call(prompt, max_tokens=MAX_TOKENS_LONG, use_opus=True)
             result = run_with_status("Stage B: WORLD 전개를 생성 중입니다...", "Stage B 생성 완료.", _job)
-            if result is not None:
+            if result:  # v3.4.1 — 빈 문자열도 저장하지 않는다
                 st.session_state["ch1_stage_b"] = result
 
     with ch1_c:
@@ -2116,9 +2445,9 @@ if selected_unit == "01":
                     profession_text=profession_text_combined,
                     period_keys=active_period_keys,
                 )
-                return llm_call(prompt, max_tokens=MAX_TOKENS_MID, use_opus=True)
+                return llm_call(prompt, max_tokens=MAX_TOKENS_LONG, use_opus=True)
             result = run_with_status("Stage C: LOSS 균열을 생성 중입니다...", "Stage C 생성 완료.", _job)
-            if result is not None:
+            if result:  # v3.4.1 — 빈 문자열도 저장하지 않는다
                 st.session_state["ch1_stage_c"] = result
 
     # 각 Stage 미리보기
@@ -2190,7 +2519,7 @@ else:
                     "UNIT 13 에필로그 생성이 완료되었습니다.",
                     _job,
                 )
-                if result is not None:
+                if result:  # v3.4.1 — 빈 문자열도 저장하지 않는다
                     ch_title, ch_body = parse_chapter_title(result)
                     st.session_state["unit_drafts"][selected_unit] = ch_body if ch_title else result
                     if ch_title:
@@ -2289,7 +2618,7 @@ else:
                     done_msg,
                     _job,
                 )
-                if result is not None:
+                if result:  # v3.4.1 — 빈 문자열도 저장하지 않는다
                     ch_title, ch_body = parse_chapter_title(result)
                     st.session_state["unit_drafts"][selected_unit] = ch_body if ch_title else result
                     if ch_title:
@@ -2337,7 +2666,7 @@ else:
                     f"UNIT {selected_unit} 다시 쓰기가 완료되었습니다.",
                     _job,
                 )
-                if result is not None:
+                if result:  # v3.4.1 — 빈 문자열도 저장하지 않는다
                     st.session_state["unit_drafts"][selected_unit] = result
 
     with draft_col3:
@@ -2423,14 +2752,14 @@ with title_col1:
                 all_drafts_text=gather_all_drafts_text(),
                 style_dna=st.session_state["style_dna"],
             )
-            return llm_call(prompt, max_tokens=MAX_TOKENS_MID)
+            return llm_call(prompt, max_tokens=MAX_TOKENS_SHORT)
 
         result = run_with_status(
             "원고를 다시 읽고 제목을 검토 중입니다...",
             "제목 검토 / 대안 제안이 완료되었습니다.",
             _job,
         )
-        if result is not None:
+        if result:  # v3.4.1 — 빈 문자열도 저장하지 않는다
             st.session_state["title_review"] = result
 
 with title_col2:

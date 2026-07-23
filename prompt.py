@@ -2004,9 +2004,40 @@ Punch 규칙: {r['punch_rule']}
 #            · _call_with_streaming() 신설 — messages.stream()으로 호출 후 누적
 #            · 구버전 SDK 대비 messages.create() 폴백 유지
 #            · main.py llm_call도 스트리밍으로 통일 (본문 집필 장문 대비)
-NOVEL_ENGINE_VERSION = "v3.3.4"
+# - v3.4.0 : 프로젝트 저장 / 불러오기 추가 (작업 연속성 확보)
+#            · 문제: 저장 기능이 없어 브라우저를 닫으면 STEP 1 자료·설계·
+#              Unit 원고가 모두 소실됐다. 50화 장편 작업에서 치명적.
+#            · build_project_snapshot() / restore_project_snapshot() 신설
+#              — session_state 최신값을 직접 참조 (사고 패턴 B 방지)
+#            · STEP 1 위젯 17개에 세션 key 부여
+#              — 기존에는 지역변수로만 존재해 저장 대상이 아니었다
+#            · apply_extracted_to_fields() 신설 — 변환 결과를 세션에 직접 반영
+#              (key 방식 전환으로 value= 인자를 못 쓰게 된 데 대한 대응)
+#            · 저장 파일에 메타(제목·저장시각·출처) 포함, 파일명 자동 생성
+#            · 오투입 방어 — Creator/Idea JSON을 넣으면 거부하고 안내
+#            · 구버전 파일 부분 복원 지원 (없는 키는 기본값 유지)
+# - v3.4.1 : [버그 수정] "완료" 메시지는 뜨는데 결과가 안 보이는 문제
+#            · 원인: llm_call이 빈 응답 시 ""를 반환 →
+#              `if result is not None`은 참이라 빈 값이 저장되고,
+#              표시 조건 `if get(key)`는 거짓이라 화면에 안 나타났다.
+#              (Unit 05-06 설계 완료 메시지 후 설계가 안 보인 사례)
+#            · llm_call — 빈 응답 시 RuntimeError를 던져 조용한 실패를 차단
+#            · 저장 판정 12곳 `is not None` → `if result:` 로 교정
+#              빈 결과가 기존 데이터를 덮어쓰지 않는다
+# - v3.4.2 : [버그 수정] STEP 2·3·4 결과가 문장 중간에서 잘리는 문제
+#            · 원인: 구모델(8192 상한) 기준 토큰값이 그대로 남아 있어
+#              입력 자료가 풍부한 작품에서 출력이 상한에 걸려 끊겼다.
+#              (진단 리포트·기승전결 보강·Unit 설계가 모두 미완으로 저장됨)
+#            · 토큰 재배정 — 신모델 최대 출력 128k 반영
+#              STEP2 분석/진단 6000 → 16000 (MAX_TOKENS_ANALYSIS)
+#              STEP3 보강·STEP4 설계 6000 → 20000 (MAX_TOKENS_DESIGN)
+#              STEP5 Unit 본문 8192 → 16000 (MAX_TOKENS_LONG)
+#            · stop_reason == max_tokens 감지 시 즉시 경고 표시
+#            · looks_truncated() 신설 — 결과가 문장 중간에서 끝났는지
+#              텍스트로도 판정. run_with_status가 '완료' 대신 경고를 띄운다.
+NOVEL_ENGINE_VERSION = "v3.4.2"
 NOVEL_ENGINE_BUILD_DATE = "2026-07-23"
-NOVEL_ENGINE_VERSION_TAG = "v3.3.4 / 2026-07-23 / Idea+Creator JSON-to-Novel Mode + Streaming API"
+NOVEL_ENGINE_VERSION_TAG = "v3.4.2 / 2026-07-23 / Token Rebalance + Truncation Guard"
 
 def get_novel_engine_version_info() -> str:
     """Novel Engine v3.0 메타 정보."""

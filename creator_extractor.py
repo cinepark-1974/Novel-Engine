@@ -466,6 +466,48 @@ def _response_text(response) -> str:
     return ""
 
 
+def _call_with_streaming(client, model: str, max_tokens: int,
+                         system: str, prompt: str):
+    """Anthropic API 호출. 긴 응답을 위해 스트리밍을 사용한다. (v3.3.4)
+
+    max_tokens가 크면 SDK가 'Streaming is required for operations that may
+    take longer than 10 minutes' 오류로 non-streaming 호출을 거부한다.
+    따라서 스트리밍으로 받아 누적한다.
+
+    Returns:
+        (raw_text, stop_reason)
+    """
+    # 1) 스트리밍 (권장 경로)
+    try:
+        text_parts = []
+        with client.messages.stream(
+            model=model,
+            max_tokens=max_tokens,
+            system=system,
+            messages=[{"role": "user", "content": prompt}],
+        ) as stream:
+            for chunk in stream.text_stream:
+                text_parts.append(chunk)
+            final = stream.get_final_message()
+            stop_reason = getattr(final, "stop_reason", "") or ""
+            joined = "".join(text_parts).strip()
+            if joined:
+                return joined, stop_reason
+            # 스트림 텍스트가 비면 최종 메시지에서 재추출
+            return (_response_text(final) or ""), stop_reason
+    except (AttributeError, TypeError):
+        pass  # 구버전 SDK — stream 미지원 또는 시그니처 불일치
+
+    # 2) 폴백 — 일반 호출
+    response = client.messages.create(
+        model=model,
+        max_tokens=max_tokens,
+        system=system,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return (_response_text(response) or ""), (getattr(response, "stop_reason", "") or "")
+
+
 # ─────────────────────────────────────
 # JSON 파싱 (scenario_extractor와 동일 로직)
 # ─────────────────────────────────────
@@ -697,14 +739,10 @@ def extract_creator_fields(
 
     # 2단계 — LLM 호출
     try:
-        response = anthropic_client.messages.create(
-            model=model,
-            max_tokens=max_tokens,
-            system="당신은 JSON만 출력하는 영상→소설 변환기다. 다른 텍스트 일체 금지.",
-            messages=[{"role": "user", "content": prompt}],
+        raw_text, _stop_reason = _call_with_streaming(
+            anthropic_client, model, max_tokens,
+            "당신은 JSON만 출력하는 영상→소설 변환기다. 다른 텍스트 일체 금지.", prompt,
         )
-        raw_text = _response_text(response)
-        _stop_reason = getattr(response, "stop_reason", "") or ""
     except Exception as e:
         return {"_error": f"Anthropic API 호출 실패: {str(e)}"}
 

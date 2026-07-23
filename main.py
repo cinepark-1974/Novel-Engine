@@ -448,6 +448,28 @@ def llm_call(user_prompt: str, max_tokens: int = MAX_TOKENS_MID, use_opus: bool 
         )
 
     model = MODEL_OPUS if use_opus else DEFAULT_MODEL
+
+    # v3.3.4 — 스트리밍 호출.
+    # max_tokens가 크면 SDK가 non-streaming 호출을 거부한다
+    # ('Streaming is required for operations that may take longer than 10 minutes').
+    # 본문 집필도 장문이라 스트리밍으로 통일한다.
+    try:
+        parts = []
+        with client.messages.stream(
+            model=model,
+            max_tokens=max_tokens,
+            system=SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_prompt}],
+        ) as stream:
+            for chunk in stream.text_stream:
+                parts.append(chunk)
+            joined = "".join(parts).strip()
+            if joined:
+                return joined
+            return response_text(stream.get_final_message())
+    except (AttributeError, TypeError):
+        pass  # 구버전 SDK 폴백
+
     response = client.messages.create(
         model=model,
         max_tokens=max_tokens,

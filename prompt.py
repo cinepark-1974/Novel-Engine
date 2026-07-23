@@ -1996,9 +1996,17 @@ Punch 규칙: {r['punch_rule']}
 #              (문자열 내부 판별 + 미완성 쌍 제거 + 괄호 자동 폐합)
 #            · strict=False 폴백 추가 — 문자열 내 raw 개행 허용
 #            · 파싱 실패 시 진단 정보 출력 (응답 길이·중단 사유·JSON 유무)
-NOVEL_ENGINE_VERSION = "v3.3.3"
+# - v3.3.4 : [버그 수정] 스트리밍 필수 오류 해결
+#            · 원인: max_tokens=32000은 SDK가 10분 초과 가능으로 판단해
+#              non-streaming 호출을 거부한다
+#              ('Streaming is required for operations that may take longer
+#               than 10 minutes')
+#            · _call_with_streaming() 신설 — messages.stream()으로 호출 후 누적
+#            · 구버전 SDK 대비 messages.create() 폴백 유지
+#            · main.py llm_call도 스트리밍으로 통일 (본문 집필 장문 대비)
+NOVEL_ENGINE_VERSION = "v3.3.4"
 NOVEL_ENGINE_BUILD_DATE = "2026-07-23"
-NOVEL_ENGINE_VERSION_TAG = "v3.3.3 / 2026-07-23 / Idea+Creator JSON-to-Novel Mode + Robust JSON Parsing"
+NOVEL_ENGINE_VERSION_TAG = "v3.3.4 / 2026-07-23 / Idea+Creator JSON-to-Novel Mode + Streaming API"
 
 def get_novel_engine_version_info() -> str:
     """Novel Engine v3.0 메타 정보."""

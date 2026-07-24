@@ -15,6 +15,12 @@
 #   M9  Period Pack 이식            — 10개 시대 카테고리 (Creator Engine 동기화)
 #   M10 Profession × Period 교차검증 — 시대별 직업 왜곡 방지
 #
+# v3.5 신규 모듈:
+#   M11 Behavioral Repetition Guard — 반복 행동 차단
+#       습관·버릇을 집필 지시가 아닌 기질로 다룬다.
+#       분석·설계 단계에는 연출 지시 금지(DESIGN_NO_CHOREOGRAPHY_BLOCK),
+#       집필 단계에는 동일 동작 반복 금지(BEHAVIORAL_REPETITION_GUARD_BLOCK).
+#
 # © 2026 BLUE JEANS PICTURES. All rights reserved.
 # ─────────────────────────────────────────────────────────────
 
@@ -165,6 +171,11 @@ BJND_SELF_VERIFICATION_BLOCK = """
 - 판정: 재설계 필요 / 통과 / 강함
 
 ★ 합계 14점 미만이면 재설계 필요하다고 명시하고, 무엇을 어떻게 강화할지 2~3줄로 제시하라. ★
+
+[추가 점검 — M11 반복 행동 (v3.5)]
+채점과 별도로 아래를 확인하고, 해당되면 수정한 뒤 출력하라.
+- 설계안에 "○○하게 하라" 식의 구체적 동작 지시가 들어갔는가? → 장면의 기능으로 바꿔라.
+- 같은 인물의 같은 신체 동작이 여러 Unit에 반복 배치되었는가? → 분산하거나 삭제하라.
 """.strip()
 
 
@@ -359,6 +370,87 @@ PROFESSION_PERIOD_CROSS_CHECK_BLOCK = """
 - 전문 용어를 썼다면 그 용어가 해당 시대에 실제 사용되었는가?
 
 ★ 확신이 없으면 현대적 전문 용어 대신 해당 시대의 보편 표현을 쓰라. ★
+""".strip()
+
+
+# =================================================================
+# [0-8] v3.5 신규 블록: M11 Behavioral Repetition Guard
+# =================================================================
+# 배경 — Creator/Idea JSON에서 넘어온 캐릭터 자료에는
+# "손을 먼저 본다", "현관문을 세 번 확인한다" 같은 고유 습관이
+# 인물당 3~4개씩 들어 있다. 이것을 집필 지시로 취급하면
+# 12 Unit에 걸쳐 같은 동작이 수십 번 반복되어, 인물이 살아 있는 게 아니라
+# 설정표를 수행하는 것으로 읽힌다.
+# 탐정소설에서는 반복 습관이 단서로 기능하지만, 일반 소설에서는
+# 세 번째 등장에서 독자가 장치를 알아채고 몰입이 깨진다.
+BEHAVIORAL_REPETITION_GUARD_BLOCK = """
+[★ BEHAVIORAL REPETITION GUARD — 반복 행동 차단 (v3.5 M11) ★]
+
+★ 이것은 HARD CONSTRAINT다. 위반은 작품 전체의 몰입을 파괴한다. ★
+
+[핵심 원칙]
+캐릭터 자료에 적힌 습관·버릇·신체 반응은 '집필 지시'가 아니라
+'인물을 이해하기 위한 재료'다. 그대로 실행하지 마라.
+
+[금지]
+1. 같은 신체 동작을 작품 전체에서 반복 사용하지 마라.
+   ❌ 인물이 긴장할 때마다 매번 "상대의 손을 먼저 본다"
+   ❌ 인물이 귀가할 때마다 매번 "현관문을 세 번 확인한다"
+   ❌ 분노할 때마다 매번 "약지 자국을 엄지로 문지른다"
+   → 같은 동작은 작품 전체에서 최대 2회. 3회째부터 독자가 장치를 알아챈다.
+
+2. 자료에 적힌 습관 목록을 소진하듯 배치하지 마라.
+   자료의 습관은 예시일 뿐이다. 그 인물이 '어떤 종류의 사람인가'를
+   알려주는 것이지, '이 동작을 쓰라'는 지시가 아니다.
+
+3. 감정을 신체 반응으로 번역하는 공식을 고정하지 마라.
+   ❌ 불안 → 항상 손, 분노 → 항상 턱, 슬픔 → 항상 목
+   → 같은 감정도 장면의 상황·상대·공간에 따라 다르게 드러나야 한다.
+
+[대신 이렇게 하라]
+습관을 '기질'로 이해하고, 장면마다 다른 방식으로 구현하라.
+
+예) 자료: "상대의 손을 먼저 본다 / 출구 가까운 자리에 앉는다"
+    → 기질: 위협을 몸으로 먼저 감지하고 공간을 통제하려는 사람
+    → 구현: 어떤 장면에선 자리를 옮기고, 어떤 장면에선 상대 어깨 너머를
+      보고, 어떤 장면에선 아무것도 하지 않는 것으로 긴장이 드러난다.
+      같은 기질이지만 매번 다른 얼굴로 나타난다.
+
+예) 자료: "미러링 화법으로 상대 감정을 먼저 명명한다"
+    → 기질: 상대를 읽어내 통제하는 사람
+    → 구현: 어떤 장면에선 말로, 어떤 장면에선 침묵으로, 어떤 장면에선
+      상대가 말하기 전에 이미 준비해둔 물건으로 드러난다.
+
+[자기 점검 — 집필 후 반드시 확인]
+- 이 Unit에서 쓴 신체 동작이 이전 Unit에서도 쓴 것인가? → 다른 방식을 찾아라.
+- 인물의 감정 표현이 매번 같은 신체 부위로 가는가? → 분산하라.
+- 독자가 "또 저 행동이네"라고 느낄 지점이 있는가? → 삭제하거나 교체하라.
+
+★ 인물은 설정표를 수행하지 않는다. 상황에 반응한다. ★
+""".strip()
+
+
+# 분석·설계 단계용 (짧은 버전) — 진단·보강·Unit 설계 프롬프트에 주입
+DESIGN_NO_CHOREOGRAPHY_BLOCK = """
+[★ 연출 지시 금지 — 설계 단계 규칙 (v3.5 M11) ★]
+
+이 문서는 '집필 지침'이지 '연출 콘티'가 아니다.
+장면별 구체적 동작을 미리 지정하지 마라.
+
+[금지 — 이렇게 쓰지 마라]
+❌ "지윤이 대답 대신 컵을 내려놓게 하라"
+❌ "이 장면에서 도균이 시선을 돌리는 동작으로 반응하게 할 것"
+❌ "손을 주머니에 넣는 동작을 반드시 배치할 것"
+→ 이런 지시는 집필 단계에서 그대로 소진되어, 인물이 상황에 반응하는 게
+  아니라 지시받은 동작을 수행하는 것으로 읽힌다. 독자는 즉시 알아챈다.
+
+[허용 — 이렇게 써라]
+✅ 장면의 기능: "이 장면은 지윤이 처음으로 그의 다정함을 의심하는 지점"
+✅ 정서의 방향: "안도에서 미세한 불신으로 온도가 내려간다"
+✅ 성립 조건: "지윤은 아직 모르고 독자만 아는 상태로 끝나야 한다"
+✅ 문장의 원리: "기태 파트는 습한 여름 리듬, 도균 파트는 건조한 가을 리듬"
+
+★ 무엇을 성립시켜야 하는가를 쓰고, 어떤 동작으로 할지는 집필에 맡겨라. ★
 """.strip()
 
 
@@ -866,6 +958,8 @@ SYSTEM_PROMPT = f"""당신은 BLUE JEANS NOVEL ENGINE v3.0이다.
 
 {BJND_SCENE_ENFORCER_BLOCK}
 
+{BEHAVIORAL_REPETITION_GUARD_BLOCK}
+
 {LOCKED_SYSTEM_RULES}
 
 {OPENING_MASTERY_BLOCK}
@@ -1258,6 +1352,8 @@ def build_merge_analysis_prompt(working_title,genre,format_mode,pov,target_lengt
 9. 장르적 재미 진단 (필수 요소 충족 여부, 실패 패턴 해당 여부)
 10. 즉시 보강이 필요한 핵심 3개
 
+{DESIGN_NO_CHOREOGRAPHY_BLOCK}
+
 {_genre_block(genre)}
 
 {locked_block}
@@ -1288,6 +1384,8 @@ def build_gap_diagnosis_prompt(working_title,merged_analysis,overview,characters
 7. 엔딩 약화 위험
 8. 독자 심리 6원칙 활용도 진단 (Information Gap/Dramatic Irony 등)
 9. 가장 먼저 보강해야 할 5개 항목과 구체적 대안
+
+{DESIGN_NO_CHOREOGRAPHY_BLOCK}
 
 {locked_block}
 
@@ -1323,6 +1421,8 @@ def build_story_reinforcement_prompt(segment_name,working_title,genre,overview,c
 6. 약한 부분 보강 포인트
 7. 반전 배치 (이 구간에 필요한 Twist 레벨과 위치)
 8. 다음 구간으로 넘기는 연결점 (Zeigarnik Effect 활용)
+
+{DESIGN_NO_CHOREOGRAPHY_BLOCK}
 
 {_genre_block(genre)}
 
@@ -1384,6 +1484,8 @@ def build_unit_blueprint_prompt(group_key,working_title,genre,format_mode,pov,ov
 {scenario_mapping_block}
 
 {pov_block}
+
+{DESIGN_NO_CHOREOGRAPHY_BLOCK}
 
 요구사항:
 - 각 Unit의 시작(Hook)과 끝(Punch)을 장르 Rule Pack 기준으로 설계할 것
@@ -2035,9 +2137,31 @@ Punch 규칙: {r['punch_rule']}
 #            · stop_reason == max_tokens 감지 시 즉시 경고 표시
 #            · looks_truncated() 신설 — 결과가 문장 중간에서 끝났는지
 #              텍스트로도 판정. run_with_status가 '완료' 대신 경고를 띄운다.
-NOVEL_ENGINE_VERSION = "v3.4.2"
+# - v3.5.0 : M11 Behavioral Repetition Guard 신설 (분석·집필 양쪽 적용)
+#            · 문제: Creator/Idea 자료의 인물 습관("손을 먼저 본다",
+#              "문을 세 번 확인한다")이 집필 지시로 취급되어 12 Unit에 걸쳐
+#              수십 번 반복. 인물이 상황에 반응하는 게 아니라 설정표를
+#              수행하는 것으로 읽혀 독자가 장치를 알아챈다.
+#              분석 단계 결과물에도 "컵을 내려놓게 하라" 식 연출 지시가 섞였다.
+#            · BEHAVIORAL_REPETITION_GUARD_BLOCK — SYSTEM_PROMPT에 상시 주입.
+#              같은 동작 작품 전체 최대 2회, 습관은 기질로 이해해 장면마다
+#              다르게 구현, 감정→신체 번역 공식 고정 금지.
+#            · DESIGN_NO_CHOREOGRAPHY_BLOCK — STEP2 진단·STEP3 보강·
+#              STEP4 Unit 설계에 주입. 장면의 기능·정서 방향·성립 조건은 쓰되
+#              구체적 동작 지정은 금지.
+#            · STEP0 변환(creator/idea_extractor) — 캐릭터를 습관 목록이 아니라
+#              기질로 기술하게 해 근원에서 차단.
+#            · M3 자기검증에 반복 행동 점검 2문항 추가 (기존 4축은 유지)
+# - v3.5.1 : [보완] M11 주입 누락 지점 보강
+#            · build_merge_analysis_prompt(STEP2 기획서 통합 분석)에만
+#              DESIGN_NO_CHOREOGRAPHY_BLOCK이 빠져 있었다.
+#              이 단계 결과가 진단·보강·설계로 계속 전달되므로 가장 앞에서
+#              막아야 한다. 주입 추가.
+#            · 주입 전수 검증 완료 — 분석 4단계(통합분석·진단·보강·Unit설계)
+#              + 집필(SYSTEM_PROMPT 상시) + 변환(STEP0) 전 구간 적용 확인
+NOVEL_ENGINE_VERSION = "v3.5.1"
 NOVEL_ENGINE_BUILD_DATE = "2026-07-23"
-NOVEL_ENGINE_VERSION_TAG = "v3.4.2 / 2026-07-23 / Token Rebalance + Truncation Guard"
+NOVEL_ENGINE_VERSION_TAG = "v3.5.1 / 2026-07-23 / M11 Behavioral Repetition Guard (full injection) + Token Rebalance"
 
 def get_novel_engine_version_info() -> str:
     """Novel Engine v3.0 메타 정보."""

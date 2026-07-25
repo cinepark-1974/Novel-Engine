@@ -30,6 +30,8 @@ from prompt import (
     build_ch1_stage_a_prompt,
     build_ch1_stage_b_prompt,
     build_ch1_stage_c_prompt,
+    build_metric_watchlist_block,
+    SIGNATURE_FOOD_OPENING_BLOCK,
     # v3.0 신규
     NOVEL_ENGINE_VERSION,
     NOVEL_ENGINE_BUILD_DATE,
@@ -142,9 +144,44 @@ BJND_THRESHOLDS = {
     "대사태그": 12,      # 말했다+물었다+대답했다 합계
     "마치처럼": 1,       # "마치~처럼"/"~듯했다"/"~같았다" 합계
     "현재형": 3,         # 현재형 종결 (치명적)
+    "계량수치": 2,       # v3.12 M15 — 숫자+계량단위 / 소수점 (서술문)
 }
 
 AUTO_REGEN_MAX_RETRIES = 1  # 자동 재생성 시도 최대 횟수
+
+# v3.12 M15 / v3.13 M15-B — 계량 수치 감지 정규식
+# 본문 검사(analyze_unit_quality)와 자료 스캔(scan_metric_expressions)의
+# 기준이 다르다. 자료의 %는 장르 배합 비중 같은 집필 지시이고,
+# 순수 소수점은 엔진 버전·단서 강도 표기라서 자료 스캔에서 제외한다.
+#
+# 단위를 3군으로 나눈다.
+#   A군 긴 단위  — 숫자와 단위 사이 공백 허용 (충돌 위험 없음)
+#   B군 기호 단위 — 공백 불허 (168cm 형태)
+#   C군 1글자 단위 — 공백 불허 + 뒤 조사 화이트리스트
+#     ("Unit 10은 … 도균" 에서 '10 도'를 잡는 오탐을 막는다)
+_METRIC_A = r"센티미터|센티|밀리미터|밀리|센치|미터|킬로그램|킬로|그램|리터|밀리리터|인치|피트|야드"
+_METRIC_B = r"㎝|㎜|cm|mm|㎏|kg|㎖|ml|평"
+_METRIC_B_PCT = r"퍼센트|프로|%"
+_METRIC_C = r"도|초|박"
+_METRIC_C_TAIL = r"(?=$|[^가-힣]|까지|씩|간|가|를|은|는|의|로|만|나|짜리|어긋)"
+
+# 본문용 — % 포함
+METRIC_UNIT_RE = (
+    rf"\d+(?:\.\d+)?\s*(?:{_METRIC_A})"
+    rf"|\d+(?:\.\d+)?(?:{_METRIC_B}|{_METRIC_B_PCT})"
+    rf"|\d+(?:\.\d+)?(?:{_METRIC_C}){_METRIC_C_TAIL}"
+)
+METRIC_DECIMAL_RE = r"\d+\.\d+"
+
+# 자료용 — % 제외, 순수 소수점 제외 (설계 지시·버전 표기 오탐 차단)
+METRIC_SCAN_RE = (
+    rf"\d+(?:\.\d+)?\s*(?:{_METRIC_A})"
+    rf"|\d+(?:\.\d+)?(?:{_METRIC_B})"
+    rf"|\d+(?:\.\d+)?(?:{_METRIC_C}){_METRIC_C_TAIL}"
+)
+
+# 자료 스캔에서 건너뛸 Creator JSON 키 (메타데이터·식별자)
+METRIC_SCAN_SKIP_KEYS = ("version", "engine", "_meta", "_id", "id", "score", "ratio")
 
 UNIT_TARGET_LENGTHS = {
     1: 7000, 2: 7000, 3: 8000,
@@ -457,6 +494,12 @@ if "_last_loaded_project" not in st.session_state:
     st.session_state["_last_loaded_project"] = ""
 if "_last_truncated" not in st.session_state:
     st.session_state["_last_truncated"] = False
+
+# v3.13 M15-B / v3.14 M16 — 집필 옵션 (STEP 4 설계보다 먼저 존재해야 한다)
+if "metric_watchlist_on" not in st.session_state:
+    st.session_state["metric_watchlist_on"] = True
+if "signature_food_opening" not in st.session_state:
+    st.session_state["signature_food_opening"] = True  # 작가 시그니처 — 기본 ON
 
 for k, v in DEFAULT_STATE.items():
     if k not in st.session_state:
@@ -849,6 +892,29 @@ def analyze_unit_quality(text: str) -> dict:
             "severity": "critical",
         }
 
+    # ── 계량 수치 (v3.12 M15 Metric Precision Ban) ──
+    # ① 숫자 + 계량 단위  ② 소수점 숫자
+    # 사회적 단위(년·월·일·시·분·원·억·만·명·개·번·층·살·회·화)는 제외한다.
+    metric_unit_hits = re.findall(METRIC_UNIT_RE, text)
+    decimal_hits = re.findall(METRIC_DECIMAL_RE, text)
+    # 중복 계산 방지 — 소수점이 계량 단위와 함께 잡힌 경우는 한 번만 센다
+    metric_total = len(set(metric_unit_hits)) + max(
+        0, len(decimal_hits) - sum(1 for h in metric_unit_hits if "." in h)
+    )
+    stats["계량 수치"] = metric_total
+    if metric_total > BJND_THRESHOLDS["계량수치"]:
+        sample = ", ".join(list(dict.fromkeys(metric_unit_hits + decimal_hits))[:4])
+        issues.append(
+            f"🚨 계량 수치 {metric_total}회 감지 ({sample}) — "
+            f"서술문의 계량 단위·소수점은 금지입니다. "
+            f"몸의 단위(손끝·한 뼘·한 박자)나 비교로 치환하세요."
+        )
+        violations["계량수치"] = {
+            "count": metric_total,
+            "threshold": BJND_THRESHOLDS["계량수치"],
+            "severity": "high",
+        }
+
     # ── 접속부사 과잉 ──
     cnt_conj = len(re.findall(r"(?:그러나|하지만|그리고|또한|그래서|따라서)", text))
     stats["접속부사"] = cnt_conj
@@ -951,6 +1017,15 @@ def build_retry_hint(violations: dict) -> str:
             lines.append(
                 f"- 엘리베이터/로비/현관 이동: 이전 {count}회 (임계 {threshold}회 초과). "
                 f"이번엔 1회 이하로. 장면 전환으로 처리."
+            )
+        elif key == "계량수치":
+            lines.append(
+                f"- 🚨 계량 수치: 이전 {count}회 (임계 {threshold}회 초과). "
+                f"이번엔 0회로. 서술문에서 계량 단위(센티미터·밀리미터·그램·도·퍼센트·초)와 "
+                f"소수점 숫자를 전부 삭제하라. "
+                f"'0.5센티미터씩 정렬했다'→'글자가 한 줄로 읽힐 때까지 손끝으로 밀었다', "
+                f"'3밀리미터 어긋나면'→'비뚜름하면'. "
+                f"인물의 정밀함은 숫자가 아니라 남이 못 보는 어긋남을 보는 눈으로 써라."
             )
         elif key == "접속부사":
             lines.append(
@@ -1072,6 +1147,134 @@ def get_story_reinforcement_text() -> str:
     merged_text = merge_nonempty(merged)
     st.session_state["story_reinforcement_merged"] = merged_text
     return merged_text
+
+
+# ─────────────────────────────────────
+# v3.13 M15-B: 자료 계량 수치 스캐너 (Unit 설계 재실행 없이 집필 단계에서 처리)
+# ─────────────────────────────────────
+# 스캔 대상 — (session_state 저장 위치, 표시 라벨)
+#   컨셉 카드 4필드는 편집 가능(editable), 나머지는 진단만.
+METRIC_SCAN_FIELDS = [
+    ("f_overview", "작품 개요", True),
+    ("f_characters", "캐릭터", True),
+    ("f_synopsis", "줄거리/트리트먼트", True),
+    ("f_notes", "추가 메모", True),
+    ("f_locked_text", "고정 설정 (LOCKED)", True),
+    ("f_open_text", "열린 설정 (OPEN)", True),
+]
+
+
+def _split_sentences_ko(text: str):
+    """한국어 문장 대략 분리 — 스캔 리포트용."""
+    import re as _re
+    parts = _re.split(r"(?<=[.!?。])\s+|\n+", text)
+    return [p.strip() for p in parts if p.strip()]
+
+
+def scan_metric_expressions(max_items: int = 60) -> list:
+    """v3.13 M15-B — 자료(컨셉 카드·설계안·보강본·Creator JSON)에서 계량 수치를 검출.
+
+    Returns: [{"src_key","where","expr","sentence","editable"}, ...]
+    본문(unit_drafts)은 스캔하지 않는다. 자료만 본다.
+    """
+    import re as _re
+    pat_scan = _re.compile(METRIC_SCAN_RE)
+
+    sources = []  # (src_key, where, text, editable)
+
+    for key, label, editable in METRIC_SCAN_FIELDS:
+        txt = st.session_state.get(key, "")
+        if isinstance(txt, str) and txt.strip():
+            sources.append((key, label, txt, editable))
+
+    # 기승전결 보강본 (편집 가능)
+    sr = st.session_state.get("story_reinforcement", {}) or {}
+    for k in ["기", "승", "전", "결"]:
+        txt = sr.get(k, "")
+        if isinstance(txt, str) and txt.strip():
+            sources.append((f"story_reinforcement::{k}", f"기승전결 보강 · {k}", txt, True))
+
+    # Unit 설계안 (편집 가능 — 재생성 없이 문장만 교체)
+    bp = st.session_state.get("unit_blueprints", {}) or {}
+    for k in ["01-02", "03-04", "05-06", "07-08", "09-10", "11-12"]:
+        txt = bp.get(k, "")
+        if isinstance(txt, str) and txt.strip():
+            sources.append((f"unit_blueprints::{k}", f"Unit {k} 설계", txt, True))
+
+    # Creator 컨셉 카드 원본 JSON (읽기 전용 — 진단만)
+    cj = st.session_state.get("creator_json_data")
+    if isinstance(cj, (dict, list)):
+        def _walk(o, path=""):
+            if isinstance(o, dict):
+                for kk, vv in o.items():
+                    _walk(vv, f"{path}.{kk}" if path else str(kk))
+            elif isinstance(o, list):
+                for i, vv in enumerate(o):
+                    _walk(vv, f"{path}[{i}]")
+            elif isinstance(o, str) and o.strip():
+                low = path.lower()
+                if any(sk in low for sk in METRIC_SCAN_SKIP_KEYS):
+                    return
+                if pat_scan.search(o):
+                    short = path.split(".")[-1] if path else "필드"
+                    sources.append((None, f"Creator 카드 · {short}", o, False))
+        _walk(cj)
+
+    results = []
+    seen = set()
+    for src_key, where, text, editable in sources:
+        for sent in _split_sentences_ko(text):
+            exprs = [m.group(0) for m in pat_scan.finditer(sent)]
+            if not exprs:
+                continue
+            for expr in dict.fromkeys(exprs):
+                sig = (where, expr, sent[:40])
+                if sig in seen:
+                    continue
+                seen.add(sig)
+                results.append({
+                    "src_key": src_key,
+                    "where": where,
+                    "expr": expr,
+                    "sentence": sent,
+                    "editable": editable,
+                })
+            if len(results) >= max_items:
+                return results
+    return results
+
+
+def replace_in_source(src_key: str, old_sentence: str, new_sentence: str) -> bool:
+    """v3.13 M15-B — 작가가 승인한 '한 문장'만 자료에서 교체한다.
+
+    ★ 자동 일괄 치환은 하지 않는다. 작가가 직접 입력한 문장으로만 교체한다. ★
+    Unit 본문(unit_drafts)은 이 함수의 대상이 아니다.
+    """
+    if not src_key or not old_sentence or old_sentence == new_sentence:
+        return False
+
+    if src_key.startswith("story_reinforcement::"):
+        k = src_key.split("::", 1)[1]
+        cur = st.session_state.get("story_reinforcement", {}).get(k, "")
+        if old_sentence not in cur:
+            return False
+        st.session_state["story_reinforcement"][k] = cur.replace(old_sentence, new_sentence, 1)
+        st.session_state["story_reinforcement_merged"] = ""  # 재조립 유도
+        return True
+
+    if src_key.startswith("unit_blueprints::"):
+        k = src_key.split("::", 1)[1]
+        cur = st.session_state.get("unit_blueprints", {}).get(k, "")
+        if old_sentence not in cur:
+            return False
+        st.session_state["unit_blueprints"][k] = cur.replace(old_sentence, new_sentence, 1)
+        return True
+
+    cur = st.session_state.get(src_key, "")
+    if not isinstance(cur, str) or old_sentence not in cur:
+        return False
+    st.session_state[src_key] = cur.replace(old_sentence, new_sentence, 1)
+    return True
 
 
 def gather_blueprints_text() -> str:
@@ -1521,6 +1724,7 @@ with st.sidebar:
 - 것이었다 ≤ {BJND_THRESHOLDS['것이었다']}회/Unit
 - 대사태그 ≤ {BJND_THRESHOLDS['대사태그']}회/Unit
 - 현재형 ≤ {BJND_THRESHOLDS['현재형']}회/Unit (치명적)
+- 계량수치 ≤ {BJND_THRESHOLDS['계량수치']}회/Unit (M15)
 """
     )
     st.caption("임계치 초과 시 자동 재생성 1회")
@@ -2358,6 +2562,8 @@ def build_blueprint(group_key: str):
             period_keys=active_period_keys,
             # v3.1 신규: 시나리오 소설화 매핑 가이드
             scenario_mapping=st.session_state.get("scenario_mapping_text", ""),
+            # v3.14 M16
+            food_signature=st.session_state.get("signature_food_opening", True),
         )
         return llm_call(prompt, max_tokens=MAX_TOKENS_DESIGN)
 
@@ -2396,6 +2602,103 @@ all_blueprints_text = gather_blueprints_text()
 # ─────────────────────────────────────
 st.markdown('<div class="section-header">✍️ STEP 5 · Unit 원고 생성 / 다시 쓰기</div>', unsafe_allow_html=True)
 
+# ─────────────────────────────────────
+# v3.13 M15-B: 계량 수치 점검 (집필 직전 · Unit 설계 재실행 불필요)
+# ─────────────────────────────────────
+if "metric_scan_result" not in st.session_state:
+    st.session_state["metric_scan_result"] = None
+
+_mw_items = st.session_state.get("metric_scan_result")
+_mw_count = len(_mw_items) if _mw_items else 0
+_mw_label = (
+    f"🔍 계량 수치 점검 (M15) — 검출 {_mw_count}건"
+    if _mw_items is not None else "🔍 계량 수치 점검 (M15)"
+)
+
+with st.expander(_mw_label, expanded=False):
+    st.markdown(
+        '<div class="callout">'
+        '<b>왜 필요한가</b> — 컨셉 카드나 설계안에 "0.5초 간격", "3초간 침묵", "90도" 같은 '
+        '계량 수치가 있으면 집필 단계가 그 숫자를 본문에 그대로 옮겨 적습니다. '
+        '자료를 다시 만들 필요는 없습니다. 검출된 문구를 집필 프롬프트에 지목 주입해서 차단합니다.'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    st.checkbox(
+        "워치리스트 자동 주입 (권장) — 검출된 문구를 집필 프롬프트에서 지목 차단",
+        key="metric_watchlist_on",
+    )
+
+    if st.button("자료 스캔", use_container_width=True, key="metric_scan_btn"):
+        st.session_state["metric_scan_result"] = scan_metric_expressions()
+        st.rerun()
+
+    _items = st.session_state.get("metric_scan_result")
+    if _items is None:
+        st.caption("‘자료 스캔’을 누르면 컨셉 카드·보강본·Unit 설계·Creator 카드를 검사합니다.")
+    elif not _items:
+        st.success("계량 수치가 검출되지 않았습니다. 그대로 집필하셔도 됩니다.")
+    else:
+        _by_where = {}
+        for it in _items:
+            _by_where.setdefault(it["where"], []).append(it)
+        st.markdown(f"**검출 {len(_items)}건 / {len(_by_where)}개 위치**")
+        for _where, _group in _by_where.items():
+            _exprs = ", ".join(dict.fromkeys(g["expr"] for g in _group))
+            st.markdown(f"- **{_where}** — {_exprs}")
+
+        st.markdown("---")
+        st.markdown("**자료 직접 수정 (선택)**")
+        st.caption(
+            "워치리스트만으로도 차단됩니다. 자료 자체를 정리하고 싶을 때만 사용하세요. "
+            "자동 치환은 하지 않습니다. 작가가 입력한 문장으로만 한 문장씩 교체합니다."
+        )
+
+        _editable = [it for it in _items if it.get("editable")]
+        if not _editable:
+            st.caption("편집 가능한 항목이 없습니다. (Creator 카드 원본은 읽기 전용입니다.)")
+        else:
+            _labels = [
+                f"[{it['where']}] {it['expr']} — {it['sentence'][:40]}…"
+                for it in _editable
+            ]
+            _sel = st.selectbox(
+                "수정할 항목", list(range(len(_editable))),
+                format_func=lambda i: _labels[i], key="metric_fix_sel",
+            )
+            _target = _editable[_sel]
+            st.text_area(
+                "원문 (읽기 전용)", value=_target["sentence"], height=110,
+                disabled=True, key="metric_fix_orig",
+            )
+            _new = st.text_area(
+                "수정 문장 — 숫자를 지우고 몸의 단위·비교·결과로 바꿔 주세요",
+                value=_target["sentence"], height=110, key="metric_fix_new",
+            )
+            _fix_c1, _fix_c2 = st.columns([1, 3])
+            with _fix_c1:
+                if st.button("이 문장 교체", type="primary", key="metric_fix_apply"):
+                    ok = replace_in_source(
+                        _target["src_key"], _target["sentence"], _new.strip()
+                    )
+                    if ok:
+                        st.session_state["metric_scan_result"] = scan_metric_expressions()
+                        st.success("교체했습니다. 재스캔 완료.")
+                        st.rerun()
+                    else:
+                        st.warning("교체하지 못했습니다. 원문이 이미 변경되었을 수 있습니다. 다시 스캔해 주세요.")
+            with _fix_c2:
+                st.caption("교체는 해당 자료 필드의 그 문장 1회만 바뀝니다. Unit 본문은 건드리지 않습니다.")
+
+# 집필 프롬프트에 주입할 워치리스트 블록
+metric_watchlist_block = ""
+if st.session_state.get("metric_watchlist_on") and st.session_state.get("metric_scan_result"):
+    metric_watchlist_block = build_metric_watchlist_block(
+        st.session_state["metric_scan_result"]
+    )
+
+
 unit_options = [f"{i:02d}" for i in range(1, 13)] + ["13"]
 selected_unit = st.selectbox(
     "작업할 Unit 선택",
@@ -2413,11 +2716,31 @@ if selected_unit == "01":
         unsafe_allow_html=True,
     )
 
+    # v3.14 M16 — 음식 오프닝 시그니처
+    _food_c1, _food_c2 = st.columns([2, 3])
+    with _food_c1:
+        st.checkbox(
+            "🍳 음식 오프닝 시그니처 (M16)",
+            key="signature_food_opening",
+            help=(
+                "Chapter 1을 음식·요리·먹는 행위로 시작합니다. "
+                "음식 앵커링 4경로(직업/계급/관계/결핍) 중 최소 1개를 통과시켜 "
+                "그 인물만의 음식이 되게 합니다. 조리가 불가능한 상황이면 "
+                "마시기·씹기로 축소하거나 직업 도구로 폴백합니다."
+            ),
+        )
+    with _food_c2:
+        if st.session_state.get("signature_food_opening", True):
+            st.caption("작가 시그니처 적용 중 — Stage A와 Unit 01-02 설계에 주입됩니다.")
+        else:
+            st.caption("시그니처 해제 — 오프닝 소재를 엔진이 자유롭게 선택합니다.")
+
     ch1_a, ch1_b, ch1_c = st.columns(3)
 
     with ch1_a:
         st.markdown("**Stage A · PEAK**")
-        st.markdown('<div class="small-meta">오프닝 장면 · 음식 시그니처 · 인물 정의 · ~2000자</div>', unsafe_allow_html=True)
+        _sigtag = "음식 시그니처" if st.session_state.get("signature_food_opening", True) else "소재 자유"
+        st.markdown(f'<div class="small-meta">오프닝 장면 · {_sigtag} · 인물 정의 · ~2000자</div>', unsafe_allow_html=True)
         if st.button("Stage A 생성", type="primary", use_container_width=True, key="ch1_a_btn"):
             def _job():
                 prompt = build_ch1_stage_a_prompt(
@@ -2429,6 +2752,10 @@ if selected_unit == "01":
                     # v3.0 신규
                     profession_text=profession_text_combined,
                     period_keys=active_period_keys,
+                    # v3.13 M15-B
+                    metric_watchlist=metric_watchlist_block,
+                    # v3.14 M16
+                    food_signature=st.session_state.get("signature_food_opening", True),
                 )
                 return llm_call(prompt, max_tokens=MAX_TOKENS_LONG, use_opus=True)
             result = run_with_status("Stage A: PEAK 오프닝을 생성 중입니다...", "Stage A 생성 완료.", _job)
@@ -2451,6 +2778,8 @@ if selected_unit == "01":
                     # v3.0 신규
                     profession_text=profession_text_combined,
                     period_keys=active_period_keys,
+                    # v3.13 M15-B
+                    metric_watchlist=metric_watchlist_block,
                 )
                 return llm_call(prompt, max_tokens=MAX_TOKENS_LONG, use_opus=True)
             result = run_with_status("Stage B: WORLD 전개를 생성 중입니다...", "Stage B 생성 완료.", _job)
@@ -2474,6 +2803,8 @@ if selected_unit == "01":
                     # v3.0 신규
                     profession_text=profession_text_combined,
                     period_keys=active_period_keys,
+                    # v3.13 M15-B
+                    metric_watchlist=metric_watchlist_block,
                 )
                 return llm_call(prompt, max_tokens=MAX_TOKENS_LONG, use_opus=True)
             result = run_with_status("Stage C: LOSS 균열을 생성 중입니다...", "Stage C 생성 완료.", _job)
@@ -2579,6 +2910,8 @@ else:
                         # v3.0 신규
                         profession_text=profession_text_combined,
                         period_keys=active_period_keys,
+                        metric_watchlist=metric_watchlist_block,
+                        food_signature=st.session_state.get("signature_food_opening", True),
                         retry_hint="",
                     )
                     first_result = generate_or_expand_unit(unit_no, prompt)
@@ -2618,6 +2951,8 @@ else:
                                 locked_block=locked_block,
                                 profession_text=profession_text_combined,
                                 period_keys=active_period_keys,
+                                metric_watchlist=metric_watchlist_block,
+                                food_signature=st.session_state.get("signature_food_opening", True),
                                 retry_hint=retry_hint,
                             )
                             retry_result = generate_or_expand_unit(unit_no, retry_prompt)

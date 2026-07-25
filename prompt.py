@@ -15,11 +15,22 @@
 #   M9  Period Pack 이식            — 10개 시대 카테고리 (Creator Engine 동기화)
 #   M10 Profession × Period 교차검증 — 시대별 직업 왜곡 방지
 #
-# v3.5~v3.11 신규 모듈 (M11~M14):
+# v3.5~v3.12 신규 모듈 (M11~M15):
 #   M11 Behavioral Repetition Guard — 반복 행동 차단 (v3.5)
 #   M12 Event Mandate             — Unit 사건 발생 강제 + 회상 30% 제한 (v3.6)
 #   M13 Paragraph Rhythm          — 문단·대사 리듬, 작가 원고 12만자 실측 (v3.7)
 #   M14 Cinematic Novel           — 속도감 + 3막15비트 + 소설의 무기 (v3.11)
+#   M15 Metric Precision Ban      — 계량 수치 금지 (v3.12)
+#   M15-B Metric Watchlist        — 자료 검출 문구 지목 차단 + 진단·수정 도구 (v3.13)
+#   M16 Signature Food Opening    — 음식·요리 오프닝 시그니처 (v3.14)
+#       Chapter 1은 가능하면 음식으로 시작한다. 작가적 트레이드 마크.
+#       음식 앵커링 4경로(직업/계급/관계/결핍) 중 최소 1개 통과 의무.
+#       M15 연동 — 요리는 계량 수치를 부르므로 몸의 감각으로만 쓴다.
+#       "0.5센티미터" "3밀리미터" 같은 계측 언어를 서술문에서 차단.
+#       소수점 숫자 전면 금지. 정밀함은 숫자가 아니라 '남이 못 보는 것을
+#       보는 눈'으로 증명한다는 원리로 치환. 집필용 블록은 SYSTEM_PROMPT에
+#       상시 주입, 설계용 축약 항목은 DESIGN_NO_CHOREOGRAPHY_BLOCK에 추가.
+#       main.py analyze_unit_quality()에 '계량수치' 임계치(2회) 연동.
 #
 # 그 외 주요 룰 (모듈 번호 없음):
 #   복합 장르 운용 원리 — 주장르 우위·집중배치·클라이맥스 보조차단 (v3.10)
@@ -132,6 +143,14 @@ OPENING_MASTERY_BLOCK = """
   오이무침을 만든다. 소품 MD가 오이를 써는 것은 그 인물이어야 할 이유가 없다.
   누구나 할 수 있는 일상이라 캐릭터가 증명되지 않는다. 오이가 오이로 끝났다.
 
+  ★ 이 사례의 정확한 교훈 (v3.14 보강) ★
+  ★음식이라는 소재가 잘못된 것이 아니다.★
+  인물과 그 소재 사이에 연결 경로가 없었던 것이 잘못이다.
+  그러므로 이 사례를 ★소재 회피의 근거로 삼지 마라.★
+  같은 인물이 촬영용 디저트를 각도 맞춰 배치하고 완성 후에도 먹지 않는다면
+  — 직업과 결핍이 동시에 증명된다. 같은 소재, 다른 결과다.
+  판정 대상은 소재가 아니라 ★경로★다.
+
 ★ 판정 기준 — 셋 다 예여야 한다 ★
 1) 이 장면은 ★이 인물의 직업·계급·성격 때문에 가능한★ 것인가?
 2) 이 장면이 인물의 ★세계와 능력★을 증명하는가?
@@ -228,6 +247,10 @@ BJND_SELF_VERIFICATION_BLOCK = """
 채점과 별도로 아래를 확인하고, 해당되면 수정한 뒤 출력하라.
 - 설계안에 "○○하게 하라" 식의 구체적 동작 지시가 들어갔는가? → 장면의 기능으로 바꿔라.
 - 같은 인물의 같은 신체 동작이 여러 Unit에 반복 배치되었는가? → 분산하거나 삭제하라.
+
+[추가 점검 — M15 계량 수치 (v3.12)]
+- 설계안에 계량 수치(센티미터·밀리미터·소수점 등)가 들어갔는가?
+  → 삭제하고 "무엇을 못 견디는 사람인가"로 바꿔라.
 """.strip()
 
 
@@ -495,6 +518,13 @@ DESIGN_NO_CHOREOGRAPHY_BLOCK = """
 ❌ "손을 주머니에 넣는 동작을 반드시 배치할 것"
 → 이런 지시는 집필 단계에서 그대로 소진되어, 인물이 상황에 반응하는 게
   아니라 지시받은 동작을 수행하는 것으로 읽힌다. 독자는 즉시 알아챈다.
+
+[금지 — 계량 수치 (v3.12 M15)]
+❌ "0.5센티미터 단위로 정렬하는 강박을 보여줄 것"
+❌ "3밀리미터의 오차도 못 견디는 인물"
+→ 설계안에 계량 수치를 쓰면 집필 단계가 그 숫자를 그대로 옮겨 적는다.
+✅ 대신: "남들 눈에 안 보이는 어긋남을 혼자 보는 사람" — 기준만 쓰고
+   숫자는 쓰지 않는다.
 
 [허용 — 이렇게 써라]
 ✅ 장면의 기능: "이 장면은 지윤이 처음으로 그의 다정함을 의심하는 지점"
@@ -1176,10 +1206,11 @@ PLANTING_PAYOFF_BLOCK = """
 # [4-B] CHAPTER 1 오프닝 규칙 — Mr.MOON 시그니처
 # =================================================================
 CHAPTER_ONE_OPENING_RULE = """
-[CHAPTER 1 오프닝 규칙 — 서사 동력의 점화 + 음식 시그니처]
+[CHAPTER 1 오프닝 규칙 — 서사 동력의 점화 (v3.14 소재 중립 정리)]
 
 이 엔진의 Chapter 1은 서사 동력(Narrative Drive)을 점화하는 3단 구조로 설계한다.
-음식을 만드는 행위는 Mr.MOON의 작가적 시그니처이자, 이 3단 구조를 실행하는 그릇이다.
+★이 블록은 구조를 규정한다. 오프닝의 소재는 별도 시그니처 블록이 규정한다.★
+(음식 시그니처가 활성화된 경우 M16 SIGNATURE FOOD OPENING의 지시를 따른다.)
 
 ═══ 3단 구조: PEAK → LOSS → LACK ═══
 
@@ -1187,15 +1218,18 @@ CHAPTER_ONE_OPENING_RULE = """
 Chapter 1은 주인공이 정상에 있는 상태에서 시작한다.
 - 독자는 이 인물에게 먼저 매혹되어야 한다
 - 가진 것을 보여줘라: 권력, 능력, 관계, 쾌락, 성취 — 구체적으로
-- 음식 장면이 PEAK를 구현한다: 최고급 재료, 정밀한 손놀림, 누군가와 함께 즐기는 행위
-- 요리하는 방식이 인물의 성격/능력/통제력을 정의한다 (Tactics = Character)
-- 혼자 만드는 것도, 누군가를 위해 만드는 것도 허용. 작품의 성격에 따라 선택.
+- ★진행 중인 일상 행위★가 PEAK를 구현한다. 설명이 아니라 행위로 보여준다.
+- 그 행위를 ★다루는 방식★이 인물의 성격/능력/통제력을 정의한다 (Tactics = Character)
+  · 정밀함 = 통제력 / 거침 = 야성 / 즉흥 = 직감형
+- 그 행위는 반드시 ★그 인물이기 때문에 성립하는 것★이어야 한다.
+  다른 인물로 바꿔도 성립한다면 실패다.
 
 [LOSS — 상실]
 PEAK의 한가운데 또는 직후에 균열이 시작된다.
 - 전화, 뉴스, 방문자, 발견 — 가진 것이 위협받는 신호
 - 상실은 구체적이어야 한다: 돈, 지위, 안전, 관계, 자유 중 하나 이상이 직접적으로 위협
-- 음식이 식거나, 잔이 비거나, 완성된 요리를 먹지 못하는 것 — 이런 이미지가 LOSS의 시각적 메타포
+- ★완성한 것을 누리지 못하는 이미지★가 LOSS의 시각적 메타포다.
+  식은 음식, 비운 잔, 끝내지 못한 일, 손에서 놓친 것.
 - 독자가 "이 사람에게 무슨 일이 생기는 거지?"라고 질문하게 만든다
 
 [LACK — 결핍 (서사 동력)]
@@ -1205,34 +1239,133 @@ LOSS가 드러내는 진짜 결핍이 작품 전체의 서사 동력이 된다.
 - 이 결핍이 2막 이후의 모든 선택과 갈등을 추동한다
 - 결핍은 Sorkin의 Intention & Obstacle과 연결된다: 무엇을 원하는가(Goal) / 왜 가질 수 없는가(Obstacle)
 
-═══ 음식 시그니처 규칙 ═══
+═══ 오프닝 공통 조건 ═══
 
-1. 인물이 무언가를 직접 만들거나 다루고 있어야 한다.
-   - 요리, 제빵, 커피 추출, 칵테일, 와인 디캔팅 등
-   - 만드는 행위 또는 최고급 음식을 다루는 행위
-   
-2. 감각 채널을 3개 이상 열어라.
-   - 소리, 냄새, 촉감, 시각, 미각 중 최소 3개를 배치한다
+1. 인물이 무언가를 ★진행 중★이어야 한다. 앉아서 생각하는 장면으로 시작하지 마라.
+2. 감각 채널을 3개 이상 열어라. 소리·냄새·촉감·시각·미각 중 최소 3개.
+3. 그 행위가 작품의 테마와 연결되어야 한다.
+   - 금융 스릴러: 정밀한 손놀림 = 정밀한 딜
+   - 호러: 따뜻한 실내 = 곧 파괴될 안전감
+   - 로맨스: 누군가를 위한 수고 = 표현하지 못한 감정
+   - 드라마: 혼자 하는 반복 행위 = 외로움의 물증
+   - 액션: 결전 전의 준비 = 생존 의지
 
-3. 요리가 인물을 정의해야 한다 (Tactics = Character).
-   - 요리하는 방식 = 인물이 세상을 다루는 방식
-   - 정밀함 = 통제력, 거침 = 야성, 즉흥 = 직감형
-
-4. 요리가 작품의 테마와 연결되어야 한다.
-   - 금융 스릴러: 정밀한 조리 = 정밀한 딜. 최고급 재료 = 최고의 지위.
-   - 호러: 따뜻한 부엌 = 곧 파괴될 안전감
-   - 로맨스: 누군가를 위한 요리 = 표현하지 못한 감정
-   - 드라마: 혼자 먹는 밥 = 외로움의 물증
-   - 액션: 전투 전 마지막 식사 = 생존 의지
-
-5. 금지 사항:
-   - ★ Chapter 1에서 회상(flashback)은 절대 금지. 과거 회상, 어린 시절 회상, 과거 사건 설명 블록 — 전부 금지. Chapter 1은 현재 시간대만 다룬다 (단, 문체는 소설 과거형으로 쓴다). ★
-   - 인물의 과거 정보가 필요하면 현재 행동/대사/사물 속에 1줄로 암시할 것. 회상 블록으로 풀지 마라.
-   - 요리를 과잉 비유의 소재로 쓰지 마라
-   - 인물 외형 묘사를 요리 장면 안에 블록으로 넣지 마라
-   - LOSS 없이 PEAK만으로 Chapter 1을 끝내지 마라
-   - 음식 장면이 분위기 장식으로 끝나면 실패
+═══ 금지 사항 ═══
+- ★ Chapter 1에서 회상(flashback)은 절대 금지. 과거 회상, 어린 시절 회상, 과거 사건 설명 블록 — 전부 금지. Chapter 1은 현재 시간대만 다룬다 (단, 문체는 소설 과거형으로 쓴다). ★
+- 인물의 과거 정보가 필요하면 현재 행동/대사/사물 속에 1줄로 암시할 것. 회상 블록으로 풀지 마라.
+- 일상 행위를 과잉 비유의 소재로 쓰지 마라. 한 번이면 족하다.
+- 인물 외형 묘사를 행위 장면 안에 블록으로 넣지 마라.
+- LOSS 없이 PEAK만으로 Chapter 1을 끝내지 마라.
+- 오프닝 장면이 분위기 장식으로 끝나면 실패다.
 """.strip()
+
+# =================================================================
+# [4-2] v3.14 신규 블록: M16 SIGNATURE FOOD OPENING — 음식 오프닝 시그니처
+# =================================================================
+SIGNATURE_FOOD_OPENING_BLOCK = """
+[★★★ SIGNATURE FOOD OPENING — 음식 오프닝 (v3.14 M16) ★★★]
+
+★ 이것은 이 작가의 작가적 시그니처다. 오프닝의 1순위 선택지다. ★
+Chapter 1은 ★가능하면 음식·요리·먹는 행위★로 시작한다.
+
+[왜 음식인가]
+음식은 인물의 ★통제력·계급·관계·결핍★을 동시에 드러내는 유일한 매개다.
+독자는 냄새와 소리와 씹는 감각을 통해 세계로 들어온다.
+설명 없이 인물을 아는 가장 빠른 길이다.
+
+★★★ 대전제 — 음식이 아니라 '이 인물의 음식' ★★★
+과거 실패 사례(소품 MD가 오이무침을 만드는 오프닝)는
+★음식이 잘못된 것이 아니라, 그 인물과 그 음식 사이에 경로가 없었던 것★이다.
+음식을 쓰기로 결정한 뒤, 반드시 아래 4경로 중 ★최소 1개★를 통과시켜라.
+경로를 통과하지 못한 음식 장면은 실패다.
+
+═══ 음식 앵커링 4경로 ═══
+
+[경로 1 — 직업의 음식]
+그 직업이 음식을 다루거나, 그 직업이 만들어낸 식습관.
+✅ 파티셰가 새벽에 빵을 굽는다 (직업이 곧 음식)
+✅ 손해사정사가 잠복 중 차 안에서 편의점 도시락을 먹는다.
+   뚜껑에 적힌 열량 표시를 습관적으로 읽는다 (직업이 만든 반사)
+✅ 소품 MD가 촬영용 케이크를 만진다. 먹을 수 없는, 보이기 위한 음식이다
+   (직업의 본질 = 진짜가 아닌 것을 진짜처럼 보이게 하기)
+
+[경로 2 — 계급의 음식]
+무엇을 먹을 수 있고 무엇을 먹을 수 없는가. 계급은 메뉴에 적혀 있다.
+✅ 남이 남긴 것을 치우면서 그 냄새로 하루를 견디는 인물
+✅ 값을 묻지 않고 주문하는 인물 / 값만 보고 고르는 인물
+
+[경로 3 — 관계의 음식]
+누구에게 먹이는가. 누가 남기는가. 누구와 같이 먹지 못하는가.
+✅ 상대가 남긴 음식을 아무 말 없이 먹어치우는 사람
+✅ 매일 두 사람 몫을 만들지만 한 사람만 먹는 식탁
+
+[경로 4 — 결핍의 음식]
+못 먹는 것. 안 먹는 것. 과하게 먹는 것. 맛을 잃은 것.
+✅ 남에게는 완벽하게 차려주고 자기는 서서 먹는 사람
+✅ 미각을 잃어가는 요리사
+
+★ 오이무침 재판정 ★
+❌ 소품 MD가 오이무침을 만든다 → 4경로 전부 미통과. 누구나 할 수 있다.
+✅ 같은 인물이 촬영용 디저트를 각도 맞춰 배치한다. 완성된 뒤에도 먹지 않는다.
+   유통기한이 지난 것을 골라 쓴다. 어차피 먹을 게 아니니까.
+   → 경로 1(직업) + 경로 4(결핍) 통과. 같은 인물, 같은 음식 소재, 다른 결과.
+
+═══ 집필 규칙 ═══
+
+1. 행위가 진행 중이어야 한다. 완성된 음식 앞에 앉아 있는 장면으로 시작하지 마라.
+   만들고 있거나, 씹고 있거나, 치우고 있어야 한다.
+
+2. 감각 채널 3개 이상. 소리·냄새·촉감을 우선한다. 맛은 마지막에 온다.
+
+3. 다루는 방식이 인물이다 (Tactics = Character).
+   정밀함 = 통제 / 거침 = 야성 / 즉흥 = 직감 / 남기는 방식 = 관계의 태도
+
+4. 음식은 LOSS의 메타포로 회수한다.
+   식은 음식, 비운 잔, 끝까지 먹지 못한 그릇 — 상실은 식탁에 먼저 도착한다.
+
+5. 일상 장면은 최대 2,000~2,500자. 3문단을 넘기면 그 안에 이상 신호가 있어야 한다.
+   Unit 01 안에서 반드시 큰 사건이 발생한다. 음식은 사건의 배경이지 대체물이 아니다.
+
+═══ 실패 유형 — 이렇게 쓰면 실패다 ═══
+❌ 레시피화 — 조리 순서를 공정처럼 나열한다. 소설이 아니라 조리법이 된다.
+❌ 맛 형용사 — "고소한", "감칠맛 도는", "입안에 퍼지는". 맛은 형용사가 아니라
+   ★행동★으로 쓴다. (더 먹는다 / 멈춘다 / 삼키지 못한다)
+❌ 카탈로그 — 재료와 도구를 5개 이상 나열한다. 2개면 충분하다.
+❌ 과잉 비유 — 요리를 인물의 심리에 하나하나 대응시킨다. 한 번이면 족하다.
+❌ 장식 — 음식 장면이 분위기로만 끝나고 사건·인물·테마에 기여하지 않는다.
+
+★★★ M15 연동 경고 — 매우 중요 ★★★
+요리는 숫자를 부른다. ★계량 수치는 절대 금지다.★
+❌ "180도로 예열한 오븐", "3분간 볶았다", "200그램을 계량했다", "60도의 물"
+✅ "오븐이 손등을 밀어낼 만큼 뜨거워졌을 때 넣었다"
+✅ "마늘이 색을 바꾸기 직전에 불을 껐다"
+✅ "손끝으로 집어 남은 양을 가늠했다"
+→ 요리하는 사람은 자를 쓰지 않는다. ★몸으로 안다.★ 그게 숙련의 증거다.
+   단, 인물이 대사로 말하는 것은 허용된다. ("물은 팔팔 끓기 직전에 내려요")
+
+═══ 장르·소재별 변주 ═══
+- 무협 / 학원무협: 객잔의 국수, 차 우리는 순서, 독을 감별하는 미각, 굶주림.
+  ★무공의 경지를 음식으로 증명하라.★ 손의 힘 조절이 곧 내공이다.
+- 추리 / 탐정: 현장 근처에서 먹는 끼니. 의뢰인이 내온 음식을 손대지 않는 직업적 불신.
+- 환생 / 정체성: ★몸이 기억하는 맛★ — 정체성 장치로 최상급이다.
+  머리는 모르는데 손이 먼저 아는 조리 동작. 전생의 입맛이 남은 혀.
+- 로맨스 / 로코: 먹여주기, 남긴 것을 먹기, 같이 먹지 못하는 사이.
+- 범죄 / 느와르: 식사 중에 협상한다. 먹으면서 하는 말이 가장 위험하다.
+- 호러: 따뜻한 부엌은 곧 파괴될 안전감이다.
+
+═══ 폴백 — 음식이 불가능한 경우에만 ═══
+전장·감옥·도주 중 등 조리가 성립하지 않는 상황이면,
+① 마시는 것 · 씹는 것 · 삼키는 것으로 최소 단위까지 축소해 본다.
+   (물 한 모금, 마른 것을 씹기, 남의 밥 냄새를 맡기 — 이것도 음식 오프닝이다)
+② 그마저 불가능하면 직업 도구를 ★음식 다루듯★ 감각적으로 쓴다.
+   이 경우에도 냄새·소리·촉감 3채널과 4경로 판정은 동일하게 적용한다.
+
+★ 판정 — 셋 다 예여야 한다 ★
+1) 4경로 중 최소 1개를 통과했는가?
+2) 다른 인물로 바꿔도 성립한다면 → 실패. 다시 써라.
+3) 계량 수치가 한 개도 없는가?
+""".strip()
+
 
 # =================================================================
 # [5] SYSTEM PROMPT
@@ -1313,6 +1446,158 @@ CINEMATIC_NOVEL_BLOCK = """
 """.strip()
 
 
+# =================================================================
+# [0-14] v3.12 신규 블록: M15 METRIC PRECISION BAN — 계량 수치 금지
+# =================================================================
+METRIC_PRECISION_BAN_BLOCK = """
+[★★★ HARD CONSTRAINT — METRIC PRECISION BAN (v3.12 M15) ★★★]
+
+★ 위반 1회로 문장이 즉시 AI 티를 낸다. 이 제약은 BJND 임계치와 동급이다. ★
+
+[문제의 정체]
+소설의 서술자는 자를 들고 있지 않다. 사람은 몸으로 세계를 감각하고,
+몸의 단위로 그것을 말한다. 계량 단위는 감각의 언어가 아니라 계측의 언어다.
+
+❌ "그녀는 라벨을 손끝으로 정렬했다. 0.5센티미터씩."
+❌ "병 하나가 3밀리미터 어긋나면 사진 전체가 흐트러진다."
+❌ "그는 2초 동안 그녀를 봤다."
+❌ "체온이 37.2도까지 올랐다."
+
+이 문장들은 정밀해 보이지만 독자에게 아무 이미지도 주지 않는다.
+숫자는 감각을 대신하지 못한다. 오히려 감각을 차단한다.
+
+[더 근본적인 문제]
+인물의 정밀함·강박·유능함을 표현하려고 숫자를 꺼내는 것은
+★캐릭터 작업을 회피하는 가장 게으른 선택★이다.
+정밀함은 숫자로 증명되지 않는다.
+정밀한 인물은 ★남들이 그냥 지나치는 어긋남을 못 견디는 사람★으로 쓴다.
+
+[금지 대상]
+1. 아라비아 숫자 + 계량 단위
+   센티미터·센티·밀리미터·밀리·미터·cm·mm·그램·킬로그램·kg·리터·ml·
+   인치·피트·평·도(온도/각도)·퍼센트·초 등.
+2. 소수점 숫자 전체 (0.5 / 3.2 / 37.2) — 서술문에서는 예외 없이 금지.
+3. 정밀 강박 표현: "정확히 N번", "N밀리미터 단위로", "1도 오차 없이".
+
+[허용 — 이것은 금지가 아니다]
+✅ 대사 안에서 인물이 직업적으로 말하는 수치 ("28도로 맞춰주세요")
+✅ 사회적 단위: 나이·연도·시각·금액·층수·개수 ("58층", "세 병", "2만 원")
+✅ 계측이 직업의 본질인 인물이 도구를 실제로 쓰는 순간
+   (의사의 차트, 바리스타의 저울, 목수의 줄자) — 그 장면 한 번만.
+
+[★ 자료의 수치는 집필 지시가 아니다 — 가장 흔한 사고 경로 ★]
+컨셉 카드·캐릭터 바이블·톤 문서·Unit 설계안에 계량 수치가 적혀 있을 수 있다.
+★그것은 인물을 이해하기 위한 메모이지, 그 숫자를 본문에 옮겨 적으라는
+지시가 아니다.★ M11(반복 행동 차단)과 동일한 원리다.
+
+자료: "눈동자가 출입구를 0.5초 간격으로 훑는 습관"
+❌ 본문: "그녀의 눈동자가 0.5초 간격으로 출입구를 훑었다."
+✅ 본문: "그녀는 대화하는 동안 출입구를 몇 번이나 확인했다.
+    본인은 확인하고 있다는 것도 몰랐다."
+
+자료: "중요한 정보를 들으면 3초간 침묵한 뒤 질문한다"
+❌ 본문: "그는 3초간 침묵한 뒤 물었다."
+✅ 본문: "그는 바로 대답하지 않았다. 침묵이 상대를 불편하게 만들 만큼
+    길어진 다음에야 입을 열었다."
+
+자료: "잔을 시계 반대 방향으로 90도 돌린 뒤 마신다"
+❌ 본문: "그는 잔을 90도 돌린 뒤 마셨다."
+✅ 본문: "그는 잔 손잡이를 자기 쪽으로 돌려놓고서야 마셨다."
+
+★ 숫자는 자료에 두고, 본문에는 그 숫자가 만들어낸 '느낌'만 가져와라. ★
+
+[치환 원리 — 숫자를 지우고 몸·사물·비교를 넣어라]
+
+❌ "0.5센티미터씩 정렬했다"
+✅ "라벨을 손끝으로 밀었다. 정면에서 봤을 때 글자가 한 줄로 읽힐 때까지."
+   → 수치가 사라지고 인물의 기준이 남는다. 그 기준이 캐릭터다.
+
+❌ "병 하나가 3밀리미터 어긋나면 사진 전체가 흐트러진다"
+✅ "병 하나가 비뚜름하면 진열대 전체가 흐트러졌다.
+    그녀 눈에만 보이는 흐트러짐이었다."
+   → 정밀함은 숫자가 아니라 ★남이 못 보는 것을 보는 눈★으로 증명된다.
+
+❌ "2초 동안 그녀를 봤다"
+✅ "그는 그녀를 봤다. 눈을 돌려야 할 때를 한 박자 넘겼다."
+
+❌ "손이 3센티미터 떨어진 거리에서 멈췄다"
+✅ "손이 멈췄다. 닿기 직전에서."
+
+[치환 어휘 — 몸의 단위]
+손끝·한 뼘·반 걸음·손가락 두 개 너비·눈에 걸릴 만큼·닿을 듯한 거리·
+한 박자·숨 한 번·눈 깜빡할 사이·어제보다·다른 것들보다
+
+[자기 점검 — 집필 후 반드시 확인]
+- 서술문에 소수점이 있는가? → 전부 삭제하고 감각으로 치환.
+- 숫자 뒤에 계량 단위가 붙어 있는가? → 몸의 단위나 비교로 바꿔라.
+- 이 숫자를 지우면 문장이 약해지는가? → 아니다. 거의 항상 강해진다.
+
+★ 자를 들이대지 마라. 그 사람 눈에만 보이는 어긋남을 써라. ★
+""".strip()
+
+
+def build_metric_watchlist_block(items, max_items=16):
+    """v3.13 M15-B — 자료에서 실제로 검출된 계량 수치 표현을 집필 프롬프트에 지목 주입.
+
+    Unit 설계를 다시 하지 않고도 집필 단계에서 자료의 수치 전이를 막는다.
+    일반 룰(M15)만으로는 자료가 반대 방향으로 밀 때 미끄러질 수 있으므로,
+    실제 문구를 이름으로 지목해서 차단한다.
+
+    items: [{"where": 자료위치, "expr": 검출표현, "sentence": 원문문장}, ...]
+           또는 문자열 리스트.
+    """
+    if not items:
+        return ""
+
+    lines = []
+    seen = set()
+    for it in items:
+        if isinstance(it, dict):
+            where = (it.get("where") or "자료").strip()
+            expr = (it.get("expr") or "").strip()
+            sentence = (it.get("sentence") or "").strip()
+        else:
+            where, expr, sentence = "자료", str(it).strip(), ""
+        if not expr or expr in seen:
+            continue
+        seen.add(expr)
+        snippet = sentence[:90] + ("…" if len(sentence) > 90 else "")
+        if snippet:
+            lines.append(f'- [{where}] "{expr}"  ← 원문: {snippet}')
+        else:
+            lines.append(f'- [{where}] "{expr}"')
+        if len(lines) >= max_items:
+            break
+
+    if not lines:
+        return ""
+
+    body = "\n".join(lines)
+    more = ""
+    if len(seen) < len([i for i in items]):
+        more = "\n(이 외에도 자료에 유사한 수치 표현이 더 있다. 모두 동일하게 처리하라.)"
+
+    return f"""
+[★★★ 계량 수치 워치리스트 — 이 작품 자료의 실제 검출 표현 (v3.13 M15-B) ★★★]
+
+아래 표현들은 이 작품의 기획 자료(컨셉 카드·캐릭터 바이블·설계안)에
+★실제로 적혀 있는 문구★다. 자료 제작 단계에서 들어간 메모이며,
+★본문에 옮겨 적으라는 지시가 아니다.★
+
+{body}{more}
+
+[처리 방법]
+1. 위 표현이 지시하는 ★느낌★만 가져오고, 숫자는 버린다.
+2. 숫자 자리에 몸의 단위(손끝·한 뼘·한 박자)나 비교(어제보다·다른 것들보다),
+   또는 결과(눈에 걸릴 만큼·못 견딜 만큼)를 넣는다.
+3. 예: "0.5초 간격으로 훑는다" → "대화 내내 출입구를 몇 번이나 확인했다.
+   본인은 확인하고 있다는 것도 몰랐다."
+
+★ 위 표현 중 어느 것도 본문 서술문에 숫자 형태로 등장해선 안 된다. ★
+★ 단, 인물이 직업 언어로 직접 말하는 대사 안에서는 허용된다. ★
+""".strip()
+
+
 SYSTEM_PROMPT = f"""당신은 BLUE JEANS NOVEL ENGINE v3.0이다.
 사용자가 입력한 기획 자료를 바탕으로 아마존/교보문고에서 바로 판매 가능한 수준의
 장편 대중소설 원고를 생성하는 전문 소설 집필 엔진이다.
@@ -1326,6 +1611,8 @@ SYSTEM_PROMPT = f"""당신은 BLUE JEANS NOVEL ENGINE v3.0이다.
 {PARAGRAPH_RHYTHM_BLOCK}
 
 {CINEMATIC_NOVEL_BLOCK}
+
+{METRIC_PRECISION_BAN_BLOCK}
 
 {LOCKED_SYSTEM_RULES}
 
@@ -2027,7 +2314,7 @@ def build_story_reinforcement_prompt(segment_name,working_title,genre,overview,c
 [STYLE DNA] {style_dna}""".strip()
 
 
-def build_unit_blueprint_prompt(group_key,working_title,genre,format_mode,pov,overview,characters,story_reinforcement_merged,synopsis,notes,style_dna,locked_block="",profession_text="",period_keys=None,scenario_mapping=""):
+def build_unit_blueprint_prompt(group_key,working_title,genre,format_mode,pov,overview,characters,story_reinforcement_merged,synopsis,notes,style_dna,locked_block="",profession_text="",period_keys=None,scenario_mapping="",food_signature=True):
     """Unit 설계 프롬프트 (v3.1)
     v3.0 추가: POV Discipline / BJND 4축 자기검증 / Reader Retention Curve /
              Profession Pack / Period Pack / Chapter Signature / Sub-genre OVERRIDE
@@ -2065,7 +2352,15 @@ def build_unit_blueprint_prompt(group_key,working_title,genre,format_mode,pov,ov
     if scenario_mapping and scenario_mapping.strip():
         scenario_mapping_block = f"\n{scenario_mapping}\n"
 
+    # v3.14 M16 — 01-02 그룹(오프닝 담당)에만 음식 시그니처 주입
+    food_section = (
+        SIGNATURE_FOOD_OPENING_BLOCK
+        if (food_signature and group_key == "01-02") else ""
+    )
+
     return f"""다음 작품의 UNIT {group_key} 설계를 작성하라. (Novel Engine v3.1)
+
+{food_section}
 
 구간 의미: {gm.get(group_key,"")}
 
@@ -2157,7 +2452,7 @@ def build_unit_blueprint_prompt(group_key,working_title,genre,format_mode,pov,ov
 [STYLE DNA] {style_dna}""".strip()
 
 
-def build_unit_draft_prompt(unit_no,working_title,genre,format_mode,pov,overview,characters,synopsis,notes,story_reinforcement_merged,all_blueprints_text,previous_drafts,style_dna,style_strength,target_length,min_length,locked_block="",profession_text="",period_keys=None,retry_hint=""):
+def build_unit_draft_prompt(unit_no,working_title,genre,format_mode,pov,overview,characters,synopsis,notes,story_reinforcement_merged,all_blueprints_text,previous_drafts,style_dna,style_strength,target_length,min_length,locked_block="",profession_text="",period_keys=None,retry_hint="",metric_watchlist="",food_signature=True):
     """Unit 원고 생성 프롬프트 (v3.0)
     v3.0 추가:
       - POV Discipline (M8)
@@ -2174,6 +2469,9 @@ def build_unit_draft_prompt(unit_no,working_title,genre,format_mode,pov,overview
     gk = detect_genre_key(genre)
     r = GENRE_RULES.get(gk, GENRE_RULES["미지정"])
     opening_rule = f"\n{CHAPTER_ONE_OPENING_RULE}\n\n{OPENING_MASTERY_BLOCK}\n" if unit_no == 1 else ""
+    # v3.14 M16 음식 오프닝 시그니처 — Unit 01에만 주입
+    if unit_no == 1 and food_signature:
+        opening_rule += f"\n{SIGNATURE_FOOD_OPENING_BLOCK}\n"
     genre_override = get_genre_override(genre)
     genre_override_block = f"\n{genre_override}\n" if genre_override else ""
 
@@ -2221,9 +2519,14 @@ def build_unit_draft_prompt(unit_no,working_title,genre,format_mode,pov,overview
 문장 자체를 그대로 복제하지는 마라.
 """
 
+    # v3.13 M15-B 계량 수치 워치리스트
+    metric_section = metric_watchlist or ""
+
     return f"""다음 작품의 UNIT {unit_no:02d} 실제 원고를 작성하라. (Novel Engine v3.0)
 
 {retry_section}
+
+{metric_section}
 
 {pov_section}
 
@@ -2416,7 +2719,7 @@ def build_title_review_prompt(current_title,overview,synopsis,story_reinforcemen
 # [10] CHAPTER 1 다단계 생성 — 3 STAGE SYSTEM
 # =================================================================
 
-def build_ch1_stage_a_prompt(working_title,genre,format_mode,pov,overview,characters,synopsis,notes,style_dna,style_strength,locked_block="",profession_text="",period_keys=None):
+def build_ch1_stage_a_prompt(working_title,genre,format_mode,pov,overview,characters,synopsis,notes,style_dna,style_strength,locked_block="",profession_text="",period_keys=None,metric_watchlist="",food_signature=True):
     """Stage A: PEAK — 오프닝 장면 (v3.0: OPENING MASTERY + Profession + Period + POV)"""
     gk = detect_genre_key(genre)
     r = GENRE_RULES.get(gk, GENRE_RULES["미지정"])
@@ -2441,7 +2744,15 @@ def build_ch1_stage_a_prompt(working_title,genre,format_mode,pov,overview,charac
     if profession_block and period_block:
         cross_check_section = f"\n{PROFESSION_PERIOD_CROSS_CHECK_BLOCK}\n"
 
+    # v3.13 M15-B 계량 수치 워치리스트
+    metric_section = metric_watchlist or ""
+
+    # v3.14 M16 음식 오프닝 시그니처
+    food_section = SIGNATURE_FOOD_OPENING_BLOCK if food_signature else ""
+
     return f"""다음 작품의 Chapter 1 오프닝 장면(Stage A: PEAK)만 작성하라. (Novel Engine v3.0)
+
+{metric_section}
 
 이것은 Chapter 1의 첫 부분이다. 전체 챕터가 아니라 오프닝 장면만 쓴다.
 
@@ -2449,13 +2760,15 @@ def build_ch1_stage_a_prompt(working_title,genre,format_mode,pov,overview,charac
 
 {CHAPTER_ONE_OPENING_RULE}
 
+{food_section}
+
 {pov_section}
 
 [이 단계의 목표]
 - 주인공이 정상(PEAK)에 있는 상태를 보여준다 (★ 오프닝 도파민, 발단 사건 아님 ★)
 - 독자가 이 인물에게 매혹되어야 한다
-- 음식을 만들거나 다루는 행위로 시작한다
-- 요리 방식이 인물의 성격/능력/통제력을 정의한다
+- 진행 중인 행위로 시작한다 (음식 시그니처가 활성화되면 M16의 지시를 따른다)
+- 그 행위를 다루는 방식이 인물의 성격/능력/통제력을 정의한다
 - 감각 채널 3개 이상을 연다
 - 가진 것을 구체적으로 보여준다: 능력, 성취, 관계, 쾌락, 공간
 
@@ -2499,7 +2812,7 @@ Hook 규칙: {r['hook_rule']}
 {_style_block(style_dna, style_strength)}""".strip()
 
 
-def build_ch1_stage_b_prompt(working_title,genre,format_mode,pov,overview,characters,synopsis,notes,style_dna,style_strength,stage_a_text="",locked_block="",profession_text="",period_keys=None):
+def build_ch1_stage_b_prompt(working_title,genre,format_mode,pov,overview,characters,synopsis,notes,style_dna,style_strength,stage_a_text="",locked_block="",profession_text="",period_keys=None,metric_watchlist=""):
     """Stage B: WORLD — 전개 (v3.0: Profession + Period + POV)"""
     gk = detect_genre_key(genre)
     r = GENRE_RULES.get(gk, GENRE_RULES["미지정"])
@@ -2520,7 +2833,12 @@ def build_ch1_stage_b_prompt(working_title,genre,format_mode,pov,overview,charac
             period_block = build_period_block_auto(locked_block)
     period_section = f"\n{period_block}\n" if period_block else ""
 
+    # v3.13 M15-B 계량 수치 워치리스트
+    metric_section = metric_watchlist or ""
+
     return f"""다음은 Chapter 1의 Stage A(오프닝 장면)이다. 이어서 Stage B(전개)만 작성하라. (Novel Engine v3.0)
+
+{metric_section}
 
 [Stage A 원고 — 이미 작성됨. 이 뒤에 이어서 쓴다.]
 {stage_a_text}
@@ -2573,7 +2891,7 @@ def build_ch1_stage_b_prompt(working_title,genre,format_mode,pov,overview,charac
 {_style_block(style_dna, style_strength)}""".strip()
 
 
-def build_ch1_stage_c_prompt(working_title,genre,format_mode,pov,overview,characters,synopsis,notes,style_dna,style_strength,stage_a_text="",stage_b_text="",locked_block="",profession_text="",period_keys=None):
+def build_ch1_stage_c_prompt(working_title,genre,format_mode,pov,overview,characters,synopsis,notes,style_dna,style_strength,stage_a_text="",stage_b_text="",locked_block="",profession_text="",period_keys=None,metric_watchlist=""):
     """Stage C: LOSS — 균열 (v3.0: Profession + Period + POV)"""
     gk = detect_genre_key(genre)
     r = GENRE_RULES.get(gk, GENRE_RULES["미지정"])
@@ -2594,7 +2912,12 @@ def build_ch1_stage_c_prompt(working_title,genre,format_mode,pov,overview,charac
             period_block = build_period_block_auto(locked_block)
     period_section = f"\n{period_block}\n" if period_block else ""
 
+    # v3.13 M15-B 계량 수치 워치리스트
+    metric_section = metric_watchlist or ""
+
     return f"""다음은 Chapter 1의 Stage A(오프닝)과 Stage B(전개)이다. 이어서 Stage C(균열)만 작성하라. (Novel Engine v3.0)
+
+{metric_section}
 이것이 Chapter 1의 마지막 부분이다.
 
 [Stage A + B 원고 — 이미 작성됨. 이 뒤에 이어서 쓴다.]
@@ -2866,9 +3189,98 @@ Punch 규칙: {r['punch_rule']}
 #            · [실측 확인] 최신 생성분(현 배포본)에서 M2·M13 효과 입증:
 #              평균문단 304→55자, 짧은문단 2→62%, 대사독립 0→33%,
 #              감각묘사 46→30. 오프닝도 오이무침→미니어처(캐릭터 앵커) 전환
-NOVEL_ENGINE_VERSION = "v3.11.0"
-NOVEL_ENGINE_BUILD_DATE = "2026-07-24"
-NOVEL_ENGINE_VERSION_TAG = "v3.11.0 / 2026-07-24 / M14 Cinematic Novel (3-act 15-beat) + dialogue tuning"
+# - v3.12.0: M15 Metric Precision Ban 신설 — 계량 수치 금지
+#            · 계기: Stage A 생성분에서 "라벨을 0.5센티미터씩 정렬",
+#              "3밀리미터 어긋나면" 발생. 작가 지적 — "사람은 이렇게 안 쓴다"
+#            · 진단: 계량 단위는 감각의 언어가 아니라 계측의 언어다.
+#              소설의 서술자는 자를 들고 있지 않다. 더 근본적으로는,
+#              인물의 정밀함·강박을 숫자로 처리하는 것은 캐릭터 작업의 회피다.
+#            · 금지: ① 숫자+계량단위(센티/밀리/그램/도/퍼센트/초 등)
+#              ② 소수점 숫자 전체(서술문) ③ "정확히 N번" 정밀 강박 표현
+#            · 허용: 대사 내 직업적 수치 / 사회적 단위(나이·연도·시각·금액·
+#              층수·개수) / 계측이 직업인 인물이 도구를 쓰는 장면 1회
+#            · 치환 원리: 숫자 자리에 몸의 단위(손끝·한 뼘·한 박자)나
+#              비교(어제보다·다른 것들보다)를 넣는다. 정밀함은
+#              "남이 못 보는 어긋남을 보는 눈"으로 증명한다.
+#            · 주입: METRIC_PRECISION_BAN_BLOCK → SYSTEM_PROMPT 상시
+#              DESIGN_NO_CHOREOGRAPHY_BLOCK·BJND_SELF_VERIFICATION_BLOCK에
+#              설계 단계용 축약 항목 추가(설계안의 숫자가 집필로 전이되는 것 차단)
+#            · main.py: BJND_THRESHOLDS["계량수치"]=2 신설, analyze_unit_quality()
+#              정규식 감지 + build_retry_hint() 재생성 지시문 연동(severity high)
+#            · [근본 원인 규명] '사랑한다고 했잖아' 설계 JSON 검사 결과,
+#              계량 수치의 발원지는 엔진이 아니라 Creator v2.6 컨셉 카드였다.
+#              하영 appearance "0.5초 간격으로 훑는" / habits "0.5초간 확인" /
+#              원우 tactics "0.5시간 단위" · habits "90도 돌린 뒤" "3초간 침묵" /
+#              tone_doc "웃음이 0.5박 늦거나" — 자료의 수치를 엔진이 집필
+#              지시로 읽고 소진한 것. M11과 동일 구조의 사고.
+#            · 그래서 M15에 '자료의 수치는 집필 지시가 아니다' 조항 추가.
+#              자료→본문 치환 예시 3종(0.5초 간격 / 3초간 침묵 / 90도) 명시.
+#            · 오탐 검증 완료: 사회적 단위(58층·2024년·오후 3시·2만 원·
+#              서른두 살·세 병·12화·도로)는 0회 검출.
+# - v3.13.0: M15-B Metric Watchlist 신설 — Unit 설계 재실행 없이 집필 단계 처리
+#            · 배경: v3.12 M15는 일반 룰이라, 자료가 반대 방향으로 밀 때
+#              미끄러질 여지가 남았다. 이미 Unit 설계가 끝난 작품에서
+#              설계를 다시 돌리는 것은 낭비 — 집필 단계 방어로 해결한다.
+#            · build_metric_watchlist_block(items) 신설 — 자료에서 실제로
+#              검출된 문구를 이름으로 지목해 프롬프트에 주입. 일반 룰보다
+#              구속력이 강하다. 원문 문장까지 함께 보여주고 치환 방법 제시.
+#            · 집필 프롬프트 4종에 metric_watchlist 인자 추가(기본값 "" — 하위 호환)
+#              build_unit_draft_prompt / build_ch1_stage_a·b·c_prompt
+#            · main.py: METRIC_UNIT_RE·METRIC_DECIMAL_RE 모듈 상수로 분리해
+#              본문 검사(M15)와 자료 스캔(M15-B)이 같은 기준을 쓰도록 통일.
+#            · scan_metric_expressions() — 컨셉 카드 6필드 / 기승전결 보강 /
+#              Unit 설계 6그룹 / Creator JSON(읽기전용) 순회 검출.
+#              Unit 본문(unit_drafts)은 스캔 대상에서 제외.
+#            · replace_in_source() — 작가가 입력한 문장으로 한 문장씩만 교체.
+#              자동 일괄 치환 없음. Unit 본문은 대상 아님(작업 규칙 7 준수).
+#            · STEP 5 상단에 진단 패널 신설. 워치리스트 자동 주입 기본 ON.
+#            · [정규식 재설계] 1차 스캔에서 오탐 25건 발생 → 단위를 3군으로 분리.
+#              A군 긴 단위(센티미터 등) 공백 허용 / B군 기호 단위(cm·kg) 공백 불허 /
+#              C군 1글자 단위(도·초·박) 공백 불허 + 뒤 조사 화이트리스트.
+#              "Unit 10은 … 도균의"를 '10 도'로 잡던 오탐 제거.
+#              자료 스캔은 %·순수소수점 제외(설계 배합 비중·엔진 버전 표기 오탐),
+#              본문 검사는 유지. Creator JSON은 version·id·score 키 스킵.
+#            · [실측] '사랑한다고 했잖아' 자료 스캔 60건→35건, 오탐 0.
+#              설계안·보강본 검출 0건(전부 %·버전 표기였음).
+#              실제 위험 문구만 남음 — 하영 "0.5초"(appearance/habits),
+#              원우 "90도"·"3초"·"0.3밀리", tone_doc "0.5박", 키 "168cm".
+# - v3.14.0: M16 Signature Food Opening 신설 — 음식·요리 오프닝을 작가 시그니처로
+#            · 계기: 작가 요청 — "오프닝은 가능하면 음식·요리 장면을 트레이드 마크로"
+#            · [룰 충돌 규명] CHAPTER_ONE_OPENING_RULE에는 이미 음식 시그니처가
+#              강하게 있었으나, v3.8 OPENING_MASTERY_BLOCK의 실패 사례가
+#              음식(오이무침)이었다. 두 블록이 같은 프롬프트에 함께 주입되고
+#              OPENING_MASTERY가 뒤에 오므로, 모델이 '음식=위험'으로 읽고
+#              매대·라벨 같은 직업 도구로 우회했다. '사랑한다고 했잖아'
+#              Stage A가 그 결과물이다.
+#            · 진단: 오이무침의 실패는 음식의 실패가 아니라, 인물과 음식 사이에
+#              연결 경로가 없었던 것의 실패다.
+#            · 해소 ①: M2 오이무침 사례에 '음식이 잘못된 것이 아니다' 보강
+#              (룰 번호 유지, 본문만 교체 — 작업 규칙 2 준수)
+#            · 해소 ②: M16에 음식 앵커링 4경로 신설 —
+#              경로1 직업의 음식 / 경로2 계급의 음식 / 경로3 관계의 음식 /
+#              경로4 결핍의 음식. 최소 1개 통과 의무. 오이무침 재판정 예시 포함.
+#            · 실패 유형 5종 명시: 레시피화 / 맛 형용사 / 카탈로그 / 과잉 비유 / 장식
+#            · M15 연동 경고: 요리는 계량 수치를 부른다("180도 예열", "3분간").
+#              숙련자는 자를 쓰지 않고 몸으로 안다는 원리로 치환.
+#            · 장르 변주 6종: 무협(내공을 손의 힘 조절로) / 추리(현장 끼니) /
+#              환생·정체성(몸이 기억하는 맛) / 로코 / 느와르 / 호러
+#            · 폴백 2단: ① 마시기·씹기·삼키기로 최소 축소 ② 직업 도구를
+#              음식 다루듯. 폴백에도 4경로 판정 동일 적용.
+#            · 주입: build_ch1_stage_a_prompt / build_unit_draft_prompt(unit_no==1) /
+#              build_unit_blueprint_prompt(group_key=="01-02")
+#              전부 food_signature=True 기본값. 작가가 UI에서 끌 수 있다.
+#            · [토글 정합성 확보] 검증 중 토글 OFF가 실효 없음을 발견.
+#              CHAPTER_ONE_OPENING_RULE이 항상 주입되면서 "음식 = 작가 시그니처",
+#              "음식 시그니처 규칙 5개"로 음식을 강제하고 있었고 M16과 중복이었다.
+#              → CHAPTER_ONE_OPENING_RULE을 ★소재 중립 3단 구조 룰★로 정리하고
+#                음식 관련 지시는 전부 M16으로 일원화. 상수명은 유지(import 영향 없음).
+#              → M2 오이무침 보강 문구도 "소재가 아니라 경로를 판정하라"로 중립화.
+#              → Stage A 목표 항목의 "음식을 만들거나 다루는 행위로 시작한다"도 중립화.
+#              실측: ON 16,047자 / OFF 13,179자, 차이 2,868자(M16 블록 정확히 일치).
+#              OFF 상태에서 음식 강제 문구 6종 전부 미검출, 3단 구조·회상 금지는 유지.
+NOVEL_ENGINE_VERSION = "v3.14.0"
+NOVEL_ENGINE_BUILD_DATE = "2026-07-25"
+NOVEL_ENGINE_VERSION_TAG = "v3.14.0 / 2026-07-25 / M16 Signature Food Opening (음식 오프닝 시그니처)"
 
 def get_novel_engine_version_info() -> str:
     """Novel Engine v3.0 메타 정보."""

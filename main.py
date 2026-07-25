@@ -110,6 +110,9 @@ except ImportError:
 # CONFIG
 # ─────────────────────────────────────
 APP_TITLE = "NOVEL ENGINE"
+# v3.11 — 엔진 정체성. 만화=그래픽 노블처럼, 이 엔진의 결과물은 시네마틱 노블이다.
+APP_FORMAT = "CINEMATIC NOVEL"
+APP_FORMAT_DESC = "영화를 연상시키는 속도감 · 3막 15비트 구조 · 소설만의 묘사와 심리"
 APP_SUB = "NOVEL WRITER STUDIO v3.0"
 
 DEFAULT_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5")
@@ -324,6 +327,26 @@ details[open] > div { background-color: var(--card) !important; }
     height: 4px;
     background: var(--y);
     border-radius: 2px;
+}
+.tagline {
+    font-size: 0.92rem;
+    font-weight: 700;
+    color: var(--navy);
+    font-family: var(--display);
+    letter-spacing: 0.14em;
+    margin-top: 0.7rem;
+    text-transform: uppercase;
+}
+.tagline span {
+    background: linear-gradient(transparent 62%, var(--y) 62%);
+    padding: 0 0.15em;
+}
+.tagline-desc {
+    font-size: 0.74rem;
+    color: var(--dim);
+    letter-spacing: 0.02em;
+    margin-top: 0.3rem;
+    font-family: var(--body);
 }
 .sub {
     font-size: 0.68rem;
@@ -1406,6 +1429,8 @@ st.markdown(
 <div class="header-wrap">
     <div class="header">BLUE JEANS PICTURES</div>
     <div class="brand-title">{APP_TITLE}</div>
+    <div class="tagline">A <span>{APP_FORMAT}</span> ENGINE</div>
+    <div class="tagline-desc">{APP_FORMAT_DESC}</div>
     <div class="sub">YOUNG · VINTAGE · FREE · INNOVATIVE</div>
 </div>
 """,
@@ -1415,8 +1440,12 @@ st.markdown(
 st.markdown(
     """
 <div class="callout">
-기획 자료를 넣으면 엔진이 분석 → 부족한 점 진단 → 기승전결 보강 → 12 Unit 설계 → Unit 원고 생성 →
-가제 검토/제목 제안까지 순서대로 진행합니다.
+<b>시네마틱 노블</b>은 만화를 그래픽 노블이라 부르는 것과 같은 뜻의 형식입니다.
+영화처럼 속도감 있게 전개되고 3막 15비트 구조를 갖추되, 영상 문법은 배제하고
+소설만이 할 수 있는 묘사와 심리를 씁니다. 카메라가 볼 수 없는 것을 쓴다는 점이
+시나리오와의 결정적 차이입니다.<br><br>
+기획 자료를 넣으면 엔진이 분석 → 부족한 점 진단 → 기승전결 보강 → 12 Unit 설계 →
+Unit 원고 생성 → 가제 검토/제목 제안까지 순서대로 진행합니다.
 </div>
 """,
     unsafe_allow_html=True,
@@ -1429,6 +1458,7 @@ render_status()
 # ─────────────────────────────────────
 with st.sidebar:
     st.markdown(f"### 👖 Novel Engine {NOVEL_ENGINE_VERSION}")
+    st.caption("Cinematic Novel Engine")
     st.caption(f"Build {NOVEL_ENGINE_BUILD_DATE}")
     st.caption(f"분석 {DEFAULT_MODEL} · 집필 {MODEL_OPUS}")
 

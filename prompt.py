@@ -3,6 +3,11 @@
 # prompt.py — v3.0 Full Upgrade
 # 2026-04-24
 #
+# v3.15 신규 모듈 (M17~M19) — 설계 전달·연속성·서술 거리:
+#   M17 Continuity Ledger         — 착의·소지품·위치·시각·날씨 상태 원장 (v3.15)
+#   M18 Narrative Distance        — 과잉 노출 / 부당한 은폐 양방향 규율 (v3.15)
+#   M19 Blueprint Adherence       — 해당 Unit 설계안 발췌 후 HARD 주입 (v3.15)
+#
 # v3.0 신규 모듈 (M1~M10):
 #   M1  BJND Scene Enforcer        — HARD CONSTRAINT 최상단 + 자동 재생성 연동
 #   M2  OPENING MASTERY            — 캐릭터 앵커 오프닝 (v3.8 재개정)
@@ -41,6 +46,8 @@
 #
 # © 2026 BLUE JEANS PICTURES. All rights reserved.
 # ─────────────────────────────────────────────────────────────
+
+import re  # v3.15 M19 — Unit 설계안 발췌에 사용
 
 # Profession Pack (v3.0 / M5)
 try:
@@ -674,6 +681,261 @@ PARAGRAPH_RHYTHM_BLOCK = """
 2) 50자 이하 문단이 절반을 넘는가?
 3) 대사가 독립 문단으로 배치되었는가?
 4) 200자 넘는 문단이 연속되지 않는가?
+""".strip()
+
+
+# =================================================================
+# [0-15] v3.15 신규 블록: M19 BLUEPRINT ADHERENCE — 설계안 준수 강제
+# =================================================================
+# 배경 — v3.14까지 Chapter 1 Stage A/B/C 프롬프트에는 Unit 설계안이
+# 전달되지 않았다. 작가가 STEP 4에서 만든 UNIT 01 설계(무대·핵심 사건·
+# Opening/Closing Signature·Plant/Payoff·클리프행어 유형)를 집필 단계가
+# 한 글자도 보지 못한 채 STEP 1 자료만으로 원고를 썼다.
+# 그 결과 "택시 안에서 도균과 조우" 설계가 "버스 정류장 조우"로 바뀌고,
+# Plant로 심어둔 오브제(택시)가 통째로 사라지는 사고가 발생했다.
+# Unit 02~12 경로는 설계안을 받긴 했으나 6개 그룹 전체(2만 자 이상)를
+# 통으로 넘겨, 정작 해당 Unit 설계가 노이즈에 묻혔다.
+# M19는 (1) 해당 Unit 설계만 발췌해 (2) 최상단 HARD 블록으로 주입한다.
+BLUEPRINT_ADHERENCE_BLOCK_HEAD = """
+[★★★ HARD CONSTRAINT — BLUEPRINT ADHERENCE (v3.15 M19) ★★★]
+
+아래는 작가가 확정한 이 Unit의 설계안이다.
+★ 이 설계안은 STEP 1 자료(작품 개요·캐릭터·줄거리)보다 우선한다. ★
+둘이 어긋나면 언제나 설계안을 따른다.
+
+[반드시 그대로 구현할 항목 — 변경 금지]
+1) 무대(장소)와 시간대 — 설계안이 지정한 공간에서 시작한다.
+2) 핵심 사건 — 설계안의 '큰 사건' / '핵심 사건'을 그대로 실행한다.
+   사건의 발생 장소·수단·매개 인물을 임의로 바꾸지 마라.
+   (예: 설계가 "택시 안에서 조우"라면 정류장·카페·길거리로 옮기지 마라.)
+3) Plant/Payoff — 설계안에 명시된 오브제·관계·능력을 반드시 심는다.
+   Plant 항목이 원고에 등장하지 않으면 이 Unit은 실패다.
+4) 클리프행어 유형 — 설계안이 지정한 유형(C1~C6)으로 닫는다.
+5) Opening / Closing Signature — 첫 문장과 마지막 문장을 그 시그니처의
+   이미지·리듬·톤으로 쓴다. 문장을 그대로 복제하지는 말고 결을 옮긴다.
+6) Unit 구조 유형([ACT]/[EMO]/[INV]/[CON]/[REV]/[SIL]) — 설계안 지정을 따른다.
+
+[집필이 자유롭게 결정할 항목]
+- 문장, 문단 리듬, 감각 묘사, 대사의 실제 어휘
+- 설계안이 지정하지 않은 소품·조연의 세부
+- 장면 내부의 동선 (단, 설계안의 사건 순서는 유지)
+
+[자가 점검 — 원고 완료 직후 필수]
+1) 설계안의 '핵심 사건'이 원고 안에서 실제로 벌어졌는가?
+2) 설계안의 Plant 항목이 전부 원고에 등장했는가?
+3) 마지막 문장이 설계안의 클리프행어 유형과 일치하는가?
+셋 중 하나라도 아니면 그 부분을 다시 써라.
+
+──────────────────────────────────────────
+""".strip()
+
+
+_UNIT_GROUP_KEYS = ["01-02", "03-04", "05-06", "07-08", "09-10", "11-12"]
+
+
+def _group_key_for_unit(unit_no) -> str:
+    """Unit 번호가 속한 설계 그룹 키를 돌려준다. (v3.15 M19)"""
+    try:
+        n = int(unit_no)
+    except (TypeError, ValueError):
+        return ""
+    if n < 1:
+        return ""
+    for key in _UNIT_GROUP_KEYS:
+        a, b = key.split("-")
+        if int(a) <= n <= int(b):
+            return key
+    return ""
+
+
+def extract_unit_blueprint(all_blueprints_text: str, unit_no) -> str:
+    """전체 설계 텍스트에서 해당 Unit 블록만 발췌한다. (v3.15 M19)
+
+    설계안 헤딩 표기가 판본마다 다르므로 아래를 모두 허용한다.
+      '## [UNIT 01]' / '# [UNIT 09]' / '# UNIT 05' / '[UNIT 01]'
+
+    반환 규칙
+      - 해당 Unit 블록을 찾으면 그 블록만.
+      - 그룹은 찾았으나 Unit 헤딩이 없으면 그룹 전체.
+      - 그룹 자체가 없으면(설계 미작성) 빈 문자열.
+    """
+    text = (all_blueprints_text or "").strip()
+    try:
+        n = int(unit_no)
+    except (TypeError, ValueError):
+        return ""
+    if not text or n < 1:
+        return ""
+
+    gkey = _group_key_for_unit(n)
+
+    # 1) 그룹 블록으로 범위 좁히기
+    #    gather_blueprints_text()가 붙이는 '[UNIT 01-02 설계]' 머리표 기준
+    group_text = text
+    if gkey:
+        gm = re.search(rf"^\[UNIT\s*{re.escape(gkey)}\s*설계\]\s*$", text, re.M)
+        if gm:
+            nxt = re.search(r"^\[UNIT\s*\d{2}-\d{2}\s*설계\]\s*$", text[gm.end():], re.M)
+            group_text = text[gm.end(): gm.end() + nxt.start()] if nxt else text[gm.end():]
+        elif re.search(r"^\[UNIT\s*\d{2}-\d{2}\s*설계\]\s*$", text, re.M):
+            # 머리표 체계는 있는데 이 그룹만 없다 = 해당 구간 설계 미작성
+            return ""
+
+    # 2) 그룹 안에서 해당 Unit 헤딩 찾기
+    heading = rf"^\s*#{{0,4}}\s*\[?\s*UNIT\s*0?{n}\s*\]?\s*$"
+    m = re.search(heading, group_text, re.M | re.I)
+    if not m:
+        return group_text.strip()
+
+    rest = group_text[m.end():]
+    nxt = re.search(r"^\s*#{0,4}\s*\[?\s*UNIT\s*0?\d{1,2}\s*\]?\s*$", rest, re.M | re.I)
+    body = rest[: nxt.start()] if nxt else rest
+    body = body.strip()
+    if not body:
+        return ""
+    return f"[UNIT {n:02d} 설계]\n{body}"
+
+
+def build_blueprint_adherence_block(all_blueprints_text: str, unit_no) -> str:
+    """해당 Unit 설계안을 HARD CONSTRAINT 블록으로 감싸 돌려준다. (v3.15 M19)
+
+    설계안이 없으면 빈 문자열을 돌려주므로, 설계 없이 집필하는 경로에서도
+    프롬프트가 깨지지 않는다.
+    """
+    bp = extract_unit_blueprint(all_blueprints_text, unit_no)
+    if not bp:
+        return ""
+    return f"{BLUEPRINT_ADHERENCE_BLOCK_HEAD}\n\n{bp}\n──────────────────────────────────────────"
+
+
+# =================================================================
+# [0-16] v3.15 신규 블록: M17 CONTINUITY LEDGER — 상태 원장
+# =================================================================
+# 배경 — UNIT 01에서 지윤이 정류장에서 앞치마를 '입고' 있었는데
+# UNIT 02가 "앞치마는 접어 가방에 넣은 채였다"로 시작하는 사고가 있었다.
+# 게다가 그 한 줄이 UNIT 02 서스펜스 전체의 근거였다.
+# unit_summaries는 '줄거리 요약'이라 물리 상태를 추적하지 못한다.
+# M17은 Unit 확정 시 착의·소지품·위치·시각·날씨 등을 원장으로 뽑아
+# 다음 Unit 프롬프트에 강제 주입한다.
+CONTINUITY_LEDGER_EXTRACT_INSTRUCTION = """
+아래 소설 원고에서 '연속성 상태 원장'을 추출하라.
+다음 Unit을 쓸 때 어긋나면 안 되는 물리적 사실만 기록한다.
+해석·감상·줄거리 요약은 쓰지 마라.
+
+★ 출력 형식 (항목이 없으면 '없음'이라고 쓴다) ★
+
+[시각·경과] 이 Unit이 끝난 시점의 날짜·시각·요일
+[날씨] 이 Unit 동안의 날씨와 종료 시점의 날씨 (비가 언제 시작·정지했는지 포함)
+[위치] 각 인물이 마지막으로 있던 장소
+[착의] 인물별 마지막 착의 상태 (벗은 것·입은 것·젖은 것 포함)
+[소지품] 인물별 소지품의 현재 위치 (누가 무엇을 어디에 두었는가)
+[신체] 부상·피로·취기 등 다음 Unit에 남는 신체 상태
+[통신] 주고받은 연락의 발신자·시각·내용 요지, 아직 답하지 않은 것
+[인지] 각 인물이 '알게 된 것'과 '아직 모르는 것'
+[독자] 독자만 알고 인물은 모르는 정보
+[미회수] 이 Unit에서 열린 채 닫히지 않은 질문·복선
+
+★ 각 항목은 한 줄씩, 사실만 건조하게. 전체 900자 이내. ★
+""".strip()
+
+CONTINUITY_LEDGER_BLOCK_HEAD = """
+[★★★ HARD CONSTRAINT — CONTINUITY LEDGER (v3.15 M17) ★★★]
+
+아래는 직전까지의 Unit이 끝난 시점의 '물리적 상태 원장'이다.
+★ 이번 Unit은 반드시 이 상태에서 이어져야 한다. ★
+
+[절대 규칙]
+1. 원장의 사실과 어긋나는 서술을 쓰지 마라.
+   - 인물이 벗어둔 옷을 다시 벗게 하지 마라.
+   - 인물이 두고 온 물건을 손에 들고 있게 하지 마라.
+   - 원장의 시각보다 앞선 시간으로 되돌아가지 마라.
+2. 날씨와 시간의 경과를 계산해서 쓰라.
+   - "어제 내린 비는 그저께 그쳤다" 같은 자기모순 문장은 치명적 실패다.
+   - 젖은 물건, 마른 물건, 남은 흔적은 원장의 날씨와 일치해야 한다.
+3. 인물이 '아직 모르는 것'을 알고 있는 것처럼 행동하게 하지 마라.
+   - 원장의 [인지] 항목을 위반하면 서사가 무너진다.
+4. 원장의 사실을 바꿔야 할 서사적 이유가 있다면,
+   원고 안에서 그 변화가 일어나는 장면을 반드시 써라.
+   설명 없이 상태만 바뀌어 있으면 독자는 오류로 읽는다.
+
+[자가 점검 — 원고 완료 직후 필수]
+- 이번 Unit의 첫 장면이 원장의 [위치]·[착의]·[소지품]과 일치하는가?
+- 시각의 흐름이 원장의 [시각·경과]에서 자연스럽게 이어지는가?
+- 날씨 관련 서술이 원장의 [날씨]와 모순되지 않는가?
+
+──────────────────────────────────────────
+""".strip()
+
+
+def build_continuity_ledger_prompt(unit_no, unit_text, prev_ledger="") -> str:
+    """Unit 원고에서 연속성 상태 원장을 추출하는 프롬프트. (v3.15 M17)"""
+    prev = f"\n[직전까지의 원장 — 갱신 기준]\n{prev_ledger}\n" if prev_ledger else ""
+    return f"""{CONTINUITY_LEDGER_EXTRACT_INSTRUCTION}
+{prev}
+[UNIT {int(unit_no):02d} 원고]
+{unit_text}""".strip()
+
+
+def build_continuity_block(ledger_text: str) -> str:
+    """상태 원장을 집필 프롬프트용 HARD 블록으로 감싼다. (v3.15 M17)"""
+    led = (ledger_text or "").strip()
+    if not led:
+        return ""
+    return f"{CONTINUITY_LEDGER_BLOCK_HEAD}\n\n{led}\n──────────────────────────────────────────"
+
+
+# =================================================================
+# [0-17] v3.15 신규 블록: M18 NARRATIVE DISTANCE DISCIPLINE
+# =================================================================
+# 배경 — M8 POV Discipline은 인칭은 잡지만 '서술 거리'는 잡지 못했다.
+# 실제 사고 두 건이 정반대 방향으로 났다.
+#   ① 과잉 노출 — 3인칭 제한인데 "그녀는 몰랐다. 이 택시가 우연히 그 골목을
+#      지난 게 아니라는 것을." 서술자가 인물이 모르는 사실을 독자에게 직접 통보.
+#   ② 부당한 은폐 — 정류장 장면을 형광등·삼각김밥까지 세밀히 서술하면서
+#      우산을 씌워주고 명함을 건넨 남자만 통째로 빠뜨린 뒤, 나중에 회상으로 보충.
+# 둘 다 독자와의 계약 위반이다. M18은 양방향을 함께 규율한다.
+NARRATIVE_DISTANCE_BLOCK = """
+[★ NARRATIVE DISTANCE DISCIPLINE — 서술 거리 규율 (v3.15 M18) ★]
+
+★ 이것은 HARD CONSTRAINT다. 시점 인물의 인지 범위가 서술의 상한이다. ★
+
+[금지 ① — 과잉 노출: 서술자가 인물보다 많이 알기]
+❌ "그녀는 몰랐다. 그 택시가 우연히 지나간 게 아니라는 것을."
+❌ "이때까지만 해도 지윤은 이것이 함정인 줄 알지 못했다."
+❌ "훗날 그녀는 이 순간을 후회하게 된다."
+→ 3인칭 제한·1인칭에서 서술자는 시점 인물이 아는 것 이상을 말할 수 없다.
+  미래 시점의 논평, 인물이 모르는 사실의 직접 통보는 전부 금지다.
+
+✅ 대신: 인물이 지각할 수 있는 물증만 놓고 판단은 독자에게 맡겨라.
+  "빈 차 표시등이 켜져 있었다. 이 시간에, 이 골목에서."
+  — 인물은 안도했고, 독자만 이상함을 느낀다. 서술자는 아무 말도 하지 않았다.
+
+[금지 ② — 부당한 은폐: 인물이 겪은 것을 서술자가 감추기]
+❌ 장면을 세밀히 서술하면서 그 장면의 핵심 사건만 빼놓고,
+   나중에 "사실 그때 누군가 옆에 서 있었다"로 보충하기.
+→ 인물이 인지한 것은 서술되어야 한다. 감추면 독자를 속인 것이 된다.
+
+✅ 은폐가 서사적으로 필요하다면, 실시간 장면에 ★인지 저하 신호★를 심어라.
+  - 공포·충격으로 시야가 좁아졌음을 그 장면 안에서 보여준다.
+  - 소리가 멀어지거나, 시간 감각이 끊기거나, 손끝만 남는 식으로.
+  - 그러면 나중의 보충이 '작가의 은폐'가 아니라 '인물의 기억 결손'이 된다.
+
+[기억 오류 장치의 총량 제한]
+- '사실은 기억이 어긋나 있었다'류의 장치는 ★한 Unit에 1회까지★.
+- 2회를 넘으면 독자는 서사적 장치가 아니라 관리 실패로 읽는다.
+- 3회 이상이면 인물의 신뢰성 자체가 붕괴한다.
+
+[감정 라벨링 금지 — 서술자의 정답 제시]
+❌ "지윤은 그 차이가 어디서 오는지 따져보지 않았다."
+❌ "그녀는 그 위화감을 느꼈지만, 위화감이라고 이름 붙이지는 않았다."
+→ 강력한 장치이지만 ★한 Unit에 1회까지★. 반복하면 서술자가 독자에게
+  정답을 짚어주는 개입이 되어, 독자가 스스로 발견하는 쾌감을 빼앗는다.
+
+[자가 점검]
+1) 시점 인물이 알 수 없는 사실을 서술자가 말한 곳이 있는가? → 삭제하라.
+2) 인물이 겪었는데 서술하지 않고 넘어간 사건이 있는가?
+   → 서술하거나, 인지 저하 신호를 그 장면에 심어라.
+3) 기억 오류·감정 라벨링 장치를 2회 이상 썼는가? → 1회로 줄여라.
 """.strip()
 
 
@@ -2452,7 +2714,7 @@ def build_unit_blueprint_prompt(group_key,working_title,genre,format_mode,pov,ov
 [STYLE DNA] {style_dna}""".strip()
 
 
-def build_unit_draft_prompt(unit_no,working_title,genre,format_mode,pov,overview,characters,synopsis,notes,story_reinforcement_merged,all_blueprints_text,previous_drafts,style_dna,style_strength,target_length,min_length,locked_block="",profession_text="",period_keys=None,retry_hint="",metric_watchlist="",food_signature=True):
+def build_unit_draft_prompt(unit_no,working_title,genre,format_mode,pov,overview,characters,synopsis,notes,story_reinforcement_merged,all_blueprints_text,previous_drafts,style_dna,style_strength,target_length,min_length,locked_block="",profession_text="",period_keys=None,retry_hint="",metric_watchlist="",food_signature=True,continuity_ledger=""):
     """Unit 원고 생성 프롬프트 (v3.0)
     v3.0 추가:
       - POV Discipline (M8)
@@ -2461,6 +2723,12 @@ def build_unit_draft_prompt(unit_no,working_title,genre,format_mode,pov,overview
       - Profession × Period 교차검증 (M10)
       - BJND Scene Enforcer 재주입 (M1)
       - retry_hint: 자동 재생성 시 이전 위반 지표를 프롬프트에 주입
+    v3.15 추가:
+      - M19 Blueprint Adherence: 전체 설계 2만 자를 통으로 넘기던 방식에서
+        해당 Unit 설계만 발췌해 최상단 HARD 블록으로 선주입하는 방식으로 변경.
+        전체 설계는 하단 참고 자료로 유지한다.
+      - M17 Continuity Ledger: continuity_ledger(직전까지의 상태 원장) 주입.
+      - M18 Narrative Distance: 과잉 노출 / 부당한 은폐 양방향 규율 주입.
     """
     if unit_no == 12:
         fr = "이 Unit은 본편의 마지막이다. 중심 갈등을 종결하고 감정적/플롯적 회수를 수행하라. 마지막 줄에 '끝.' 출력."
@@ -2517,14 +2785,44 @@ def build_unit_draft_prompt(unit_no,working_title,genre,format_mode,pov,overview
 이 Unit의 설계안(blueprint)에 "Opening Signature"와 "Closing Signature"가 명시되어 있다면,
 첫 문장과 마지막 문장을 그 시그니처의 결로 작성하라. 시그니처의 이미지·리듬·톤을 반영하되,
 문장 자체를 그대로 복제하지는 마라.
+
+[마지막 훅 문장 검증 — v3.15 M6 보강]
+★ 마지막 한두 문장(훅)은 작품에서 가장 많이 다시 읽히는 자리다.
+  여기에 사실 오류가 있으면 독자가 즉시 알아채고 신뢰를 잃는다. ★
+원고를 끝낸 뒤, 마지막 훅 문장을 아래 3가지로 반드시 검산하라.
+
+1) 시간선 — 문장에 등장하는 시점 표현(어제·그저께·사흘 전·아까)이
+   앞선 서술 및 상태 원장의 시각과 모순되지 않는가?
+   ❌ "어제 내린 비는, 그저께 그쳤다." — 어제 내린 비가 그저께 그칠 수 없다.
+   이런 자기모순 한 줄이 챕터 전체의 서늘함을 무효로 만든다.
+2) 인과 — 훅이 겨냥한 '서늘함'이 실제로 성립하는가?
+   젖은 봉투가 무서우려면 '비가 그친 지 오래되었다'가 먼저 성립해야 한다.
+   전제가 성립하지 않으면 훅은 작동하지 않는다.
+3) 정보 — 이 문장이 드러내는 사실을 시점 인물이 알 수 있는가?
+   인물이 알 수 없는 것을 서술자가 말하면 M18 위반이다.
+
+★ 셋 중 하나라도 걸리면 훅 문장을 다시 써라. 다른 문장을 고치지 말고
+  훅만 교체하는 것으로 충분한 경우가 대부분이다. ★
 """
 
     # v3.13 M15-B 계량 수치 워치리스트
     metric_section = metric_watchlist or ""
 
+    # v3.15 M19 Blueprint Adherence — 해당 Unit 설계안만 발췌해 최상단 주입
+    bp_block = build_blueprint_adherence_block(all_blueprints_text, unit_no)
+    bp_section = f"\n{bp_block}\n" if bp_block else ""
+
+    # v3.15 M17 Continuity Ledger — 직전까지의 물리 상태 원장 주입
+    cont_block = build_continuity_block(continuity_ledger)
+    cont_section = f"\n{cont_block}\n" if cont_block else ""
+
     return f"""다음 작품의 UNIT {unit_no:02d} 실제 원고를 작성하라. (Novel Engine v3.0)
 
 {retry_section}
+
+{bp_section}
+
+{cont_section}
 
 {metric_section}
 
@@ -2555,6 +2853,8 @@ Punch 규칙: {r['punch_rule']}
 - Too Wet 금지: 감정을 직접 서술하지 말고 행동으로 보여줄 것
 
 {BJND_SCENE_ENFORCER_BLOCK}
+
+{NARRATIVE_DISTANCE_BLOCK}
 
 {PACING_RULES_BLOCK}
 
@@ -2626,7 +2926,8 @@ Punch 규칙: {r['punch_rule']}
 [줄거리 / 트리트먼트] {synopsis}
 [추가 메모] {notes}
 [기승전결 보강본] {story_reinforcement_merged}
-[전체 Unit 설계] {all_blueprints_text}
+[전체 Unit 설계 — 참고용. 이번 Unit의 지시는 최상단 BLUEPRINT ADHERENCE 블록이 우선한다]
+{all_blueprints_text}
 [이전까지 작성된 Unit 원고] {previous_drafts or "이전 원고 없음"}
 ★ 이전 원고를 반드시 확인하고, 이전 Unit에서 이미 사용한 장면/행동/상황을 이번 Unit에서 반복하지 마라.
   - 이전에 전화 장면이 2회 이상 있었으면 이번 Unit은 전화 대신 대면/발견/관찰을 써라.
@@ -2719,8 +3020,12 @@ def build_title_review_prompt(current_title,overview,synopsis,story_reinforcemen
 # [10] CHAPTER 1 다단계 생성 — 3 STAGE SYSTEM
 # =================================================================
 
-def build_ch1_stage_a_prompt(working_title,genre,format_mode,pov,overview,characters,synopsis,notes,style_dna,style_strength,locked_block="",profession_text="",period_keys=None,metric_watchlist="",food_signature=True):
-    """Stage A: PEAK — 오프닝 장면 (v3.0: OPENING MASTERY + Profession + Period + POV)"""
+def build_ch1_stage_a_prompt(working_title,genre,format_mode,pov,overview,characters,synopsis,notes,style_dna,style_strength,locked_block="",profession_text="",period_keys=None,metric_watchlist="",food_signature=True,all_blueprints_text=""):
+    """Stage A: PEAK — 오프닝 장면 (v3.0: OPENING MASTERY + Profession + Period + POV)
+
+    v3.15 M19 — all_blueprints_text를 받아 UNIT 01 설계안을 최상단에 주입한다.
+    v3.14까지 Chapter 1 경로는 설계안을 전혀 받지 못했다.
+    """
     gk = detect_genre_key(genre)
     r = GENRE_RULES.get(gk, GENRE_RULES["미지정"])
 
@@ -2750,7 +3055,13 @@ def build_ch1_stage_a_prompt(working_title,genre,format_mode,pov,overview,charac
     # v3.14 M16 음식 오프닝 시그니처
     food_section = SIGNATURE_FOOD_OPENING_BLOCK if food_signature else ""
 
+    # v3.15 M19 Blueprint Adherence — UNIT 01 설계안 발췌 주입
+    bp_block = build_blueprint_adherence_block(all_blueprints_text, 1)
+    bp_section = f"\n{bp_block}\n" if bp_block else ""
+
     return f"""다음 작품의 Chapter 1 오프닝 장면(Stage A: PEAK)만 작성하라. (Novel Engine v3.0)
+
+{bp_section}
 
 {metric_section}
 
@@ -2783,12 +3094,17 @@ def build_ch1_stage_a_prompt(working_title,genre,format_mode,pov,overview,charac
 - ★ 전화/메시지는 Stage A에서 최대 1회. 2번 이상 전화가 오면 실패. ★
 - ★ 금융 용어, 수익률, 블룸버그 터미널 숫자를 나열하지 마라. 인물의 행동으로 능력을 보여줘라. ★
 - ★ Stage A는 오직 한 장소, 한 시간대에서만 진행한다. 장소 이동 금지. ★
+- ★ '끝.'을 붙이지 마라. (v3.15) 이것은 Chapter 1의 한 조각일 뿐이며,
+  Stage B가 바로 뒤에 이어진다. 마지막 줄에 '끝.'을 쓰면 병합본 한가운데에
+  '끝.'이 박혀 원고가 망가진다. 종료 표시 없이 장면 문장으로 끝내라. ★
 
 [장르적 재미]
 {r['genre_fun']}
 Hook 규칙: {r['hook_rule']}
 
 {BJND_SCENE_ENFORCER_BLOCK}
+
+{NARRATIVE_DISTANCE_BLOCK}
 
 {PACING_RULES_BLOCK}
 
@@ -2812,8 +3128,11 @@ Hook 규칙: {r['hook_rule']}
 {_style_block(style_dna, style_strength)}""".strip()
 
 
-def build_ch1_stage_b_prompt(working_title,genre,format_mode,pov,overview,characters,synopsis,notes,style_dna,style_strength,stage_a_text="",locked_block="",profession_text="",period_keys=None,metric_watchlist=""):
-    """Stage B: WORLD — 전개 (v3.0: Profession + Period + POV)"""
+def build_ch1_stage_b_prompt(working_title,genre,format_mode,pov,overview,characters,synopsis,notes,style_dna,style_strength,stage_a_text="",locked_block="",profession_text="",period_keys=None,metric_watchlist="",all_blueprints_text=""):
+    """Stage B: WORLD — 전개 (v3.0: Profession + Period + POV)
+
+    v3.15 M19 — UNIT 01 설계안 주입.
+    """
     gk = detect_genre_key(genre)
     r = GENRE_RULES.get(gk, GENRE_RULES["미지정"])
 
@@ -2836,7 +3155,13 @@ def build_ch1_stage_b_prompt(working_title,genre,format_mode,pov,overview,charac
     # v3.13 M15-B 계량 수치 워치리스트
     metric_section = metric_watchlist or ""
 
+    # v3.15 M19 Blueprint Adherence — UNIT 01 설계안 발췌 주입
+    bp_block = build_blueprint_adherence_block(all_blueprints_text, 1)
+    bp_section = f"\n{bp_block}\n" if bp_block else ""
+
     return f"""다음은 Chapter 1의 Stage A(오프닝 장면)이다. 이어서 Stage B(전개)만 작성하라. (Novel Engine v3.0)
+
+{bp_section}
 
 {metric_section}
 
@@ -2865,11 +3190,16 @@ def build_ch1_stage_b_prompt(working_title,genre,format_mode,pov,overview,charac
 - 정보를 대사로 운반하지 마라 (설명용 대사 금지)
 - 이 단계에서 균열(LOSS)을 시작하지 마라
 - 인물의 과거 정보가 필요하면 현재 행동/대사/사물 속에 1줄로 암시할 것
+- ★ '끝.'을 붙이지 마라. (v3.15) Stage C가 바로 뒤에 이어진다.
+  마지막 줄에 '끝.'을 쓰면 병합본 한가운데에 '끝.'이 박혀 원고가 망가진다.
+  종료 표시 없이 장면 문장으로 끝내라. ★
 
 [장르적 재미]
 {r['genre_fun']}
 
 {BJND_SCENE_ENFORCER_BLOCK}
+
+{NARRATIVE_DISTANCE_BLOCK}
 
 {PACING_RULES_BLOCK}
 
@@ -2891,8 +3221,11 @@ def build_ch1_stage_b_prompt(working_title,genre,format_mode,pov,overview,charac
 {_style_block(style_dna, style_strength)}""".strip()
 
 
-def build_ch1_stage_c_prompt(working_title,genre,format_mode,pov,overview,characters,synopsis,notes,style_dna,style_strength,stage_a_text="",stage_b_text="",locked_block="",profession_text="",period_keys=None,metric_watchlist=""):
-    """Stage C: LOSS — 균열 (v3.0: Profession + Period + POV)"""
+def build_ch1_stage_c_prompt(working_title,genre,format_mode,pov,overview,characters,synopsis,notes,style_dna,style_strength,stage_a_text="",stage_b_text="",locked_block="",profession_text="",period_keys=None,metric_watchlist="",all_blueprints_text=""):
+    """Stage C: LOSS — 균열 (v3.0: Profession + Period + POV)
+
+    v3.15 M19 — UNIT 01 설계안 주입.
+    """
     gk = detect_genre_key(genre)
     r = GENRE_RULES.get(gk, GENRE_RULES["미지정"])
 
@@ -2915,7 +3248,13 @@ def build_ch1_stage_c_prompt(working_title,genre,format_mode,pov,overview,charac
     # v3.13 M15-B 계량 수치 워치리스트
     metric_section = metric_watchlist or ""
 
+    # v3.15 M19 Blueprint Adherence — UNIT 01 설계안 발췌 주입
+    bp_block = build_blueprint_adherence_block(all_blueprints_text, 1)
+    bp_section = f"\n{bp_block}\n" if bp_block else ""
+
     return f"""다음은 Chapter 1의 Stage A(오프닝)과 Stage B(전개)이다. 이어서 Stage C(균열)만 작성하라. (Novel Engine v3.0)
+
+{bp_section}
 
 {metric_section}
 이것이 Chapter 1의 마지막 부분이다.
@@ -2964,6 +3303,8 @@ def build_ch1_stage_c_prompt(working_title,genre,format_mode,pov,overview,charac
 Punch 규칙: {r['punch_rule']}
 
 {BJND_SCENE_ENFORCER_BLOCK}
+
+{NARRATIVE_DISTANCE_BLOCK}
 
 {profession_section}
 
@@ -3278,9 +3619,75 @@ Punch 규칙: {r['punch_rule']}
 #              → Stage A 목표 항목의 "음식을 만들거나 다루는 행위로 시작한다"도 중립화.
 #              실측: ON 16,047자 / OFF 13,179자, 차이 2,868자(M16 블록 정확히 일치).
 #              OFF 상태에서 음식 강제 문구 6종 전부 미검출, 3단 구조·회상 금지는 유지.
-NOVEL_ENGINE_VERSION = "v3.14.0"
-NOVEL_ENGINE_BUILD_DATE = "2026-07-25"
-NOVEL_ENGINE_VERSION_TAG = "v3.14.0 / 2026-07-25 / M16 Signature Food Opening (음식 오프닝 시그니처)"
+# - v3.15.0: M17·M18·M19 신설 + Chapter 1 설계안 전달 경로 복구 + 후처리 정리기
+#            [배경] 《사랑한다고 했잖아》 UNIT 01·02 실제 원고 검토에서
+#            엔진 귀책 사고 5종이 확인되었다. 저장된 프로젝트 JSON으로 전부 실증.
+#
+#            ① [치명] Chapter 1 Stage A/B/C 프롬프트에 Unit 설계안 미전달
+#              build_unit_draft_prompt만 all_blueprints_text를 받고,
+#              build_ch1_stage_a·b·c_prompt에는 파라미터 자체가 없었다.
+#              작가가 STEP 4에서 확정한 UNIT 01 설계(무대·핵심 사건·
+#              Opening/Closing Signature·Plant/Payoff·클리프행어 유형)를
+#              집필 단계가 한 글자도 보지 못한 채 STEP 1 자료만으로 원고를 썼다.
+#              실측 이탈: 설계 "쇼룸 촬영 현장 → 택시 안에서 도균과 조우"가
+#              원고에서 "반지하 작업실 → 버스 정류장 조우"로 바뀌고,
+#              Plant 오브제 '택시'와 '기태의 칼가방'이 통째로 소멸.
+#              → M19 Blueprint Adherence 신설로 해결.
+#
+#            ② [치명] Stage A·B 프롬프트에 '끝.' 금지 지시 누락
+#              Stage C에만 금지 지시가 있어, Stage A와 B가 각각 마지막 줄에
+#              '끝.'을 출력했고 병합본 한가운데에 '끝.'이 두 번 박혔다.
+#              저장 JSON의 ch1_stage_a / ch1_stage_b 말미에서 직접 확인.
+#              → Stage A·B [금지] 항목에 추가 + main.py 후처리 정리기 병행.
+#
+#            ③ [치명] 연속성 관리 부재
+#              UNIT 01에서 정류장에 앞치마를 '입고' 있었는데 UNIT 02가
+#              "앞치마는 접어 가방에 넣은 채였다"로 시작. 그 한 줄이
+#              UNIT 02 서스펜스 전체의 근거라 챕터 논리가 붕괴했다.
+#              같은 Unit 안에서 앞치마를 두 번 벗는 서술도 발생.
+#              unit_summaries는 줄거리 요약이라 물리 상태를 추적하지 못한다.
+#              → M17 Continuity Ledger 신설.
+#
+#            ④ [중대] 서술 거리 위반 — 양방향
+#              과잉 노출: 3인칭 제한인데 "그녀는 몰랐다. 이 택시가 우연히
+#              그 골목을 지난 게 아니라는 것을." (저장 JSON ch1_stage_b)
+#              부당한 은폐: 정류장 장면을 삼각김밥까지 세밀히 서술하면서
+#              우산을 씌우고 명함을 건넨 남자만 빠뜨린 뒤 회상으로 보충.
+#              M8 POV Discipline은 인칭만 잡고 서술 거리는 잡지 못했다.
+#              → M18 Narrative Distance Discipline 신설.
+#
+#            ⑤ [중대] 마지막 훅 문장의 시간선 붕괴
+#              UNIT 02 종결 "어제 내린 비는, 그저께 그쳤다." — 자기모순.
+#              훅이 겨냥한 서늘함(젖은 봉투)이 전제 붕괴로 무효화.
+#              → M6에 마지막 훅 3단 검산(시간선·인과·정보) 추가.
+#
+#            [신규 모듈]
+#            · M17 Continuity Ledger
+#              CONTINUITY_LEDGER_EXTRACT_INSTRUCTION — 원고에서 시각·날씨·
+#              위치·착의·소지품·신체·통신·인지·독자·미회수 10개 항목 추출.
+#              build_continuity_ledger_prompt(unit_no, unit_text, prev_ledger)
+#              build_continuity_block(ledger_text) — 집필용 HARD 블록 래핑.
+#              build_unit_draft_prompt에 continuity_ledger 인자 추가(기본 "").
+#            · M18 Narrative Distance Discipline
+#              NARRATIVE_DISTANCE_BLOCK — 과잉 노출/부당한 은폐 양방향 금지,
+#              기억 오류 장치 Unit당 1회 제한, 감정 라벨링 Unit당 1회 제한.
+#              주입: build_unit_draft_prompt / build_ch1_stage_a·b·c_prompt
+#            · M19 Blueprint Adherence
+#              extract_unit_blueprint(all_blueprints_text, unit_no) — 헤딩 표기
+#              4종('## [UNIT 01]' / '# [UNIT 09]' / '# UNIT 05' / '[UNIT 01]')
+#              을 모두 허용하는 발췌기. 그룹 미작성 시 빈 문자열 반환.
+#              build_blueprint_adherence_block() — HARD 블록 래핑.
+#              Stage A·B·C에 all_blueprints_text 인자 추가(기본 "" — 하위 호환).
+#              build_unit_draft_prompt은 전체 2만 자 통주입 → 해당 Unit 발췌본을
+#              최상단 선주입 + 전체 설계는 하단 참고용으로 강등.
+#            · [검증] 실제 저장 파일
+#              Unit설계_사랑한다고_했잖아_novelengine_20260725_0255.json
+#              (전체 설계 25,654자)로 UNIT 01~10 발췌 성공, 제목 전부 일치.
+#              설계 미작성 구간인 UNIT 11·12는 빈 문자열 반환 확인.
+#            · prompt.py에 import 문이 하나도 없어 `import re` 신규 추가.
+NOVEL_ENGINE_VERSION = "v3.15.0"
+NOVEL_ENGINE_BUILD_DATE = "2026-07-26"
+NOVEL_ENGINE_VERSION_TAG = "v3.15.0 / 2026-07-26 / M17 Continuity Ledger · M18 Narrative Distance · M19 Blueprint Adherence"
 
 def get_novel_engine_version_info() -> str:
     """Novel Engine v3.0 메타 정보."""

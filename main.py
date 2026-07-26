@@ -5,6 +5,41 @@ from datetime import datetime
 from io import BytesIO
 from typing import Optional, List
 
+# ─────────────────────────────────────────────────────────────
+# BLUE JEANS NOVEL ENGINE — main.py 변경 이력 (누적)
+#
+# v3.15.0 (2026-07-26) — 설계 전달 경로 복구 + 연속성 + 후처리 정리기
+#   [실증 기반] 《사랑한다고 했잖아》 UNIT 01·02 원고와 저장 JSON 3종
+#   (Unit설계_20260725_0255 / novelengine_20260725_1313)으로 사고 5종 확인.
+#
+#   1. M19 설계안 전달 — Stage A/B/C 호출부에 all_blueprints_text 전달.
+#      v3.14까지 Chapter 1은 Unit 설계안을 한 글자도 받지 못했다.
+#      그 결과 설계 "택시 안에서 도균과 조우"가 원고에서 "정류장 조우"로
+#      바뀌고 Plant 오브제(택시·칼가방)가 소멸했다.
+#   2. sanitize_manuscript() 신설 — 본문 중간 '끝.'·마크다운 마커 제거.
+#      Stage 생성 직후 / 병합 직후 / Unit 저장 직후 3중 적용.
+#      ★ 문장은 한 글자도 바꾸지 않는다 (작업 규칙 7 준수). ★
+#   3. export_docx 제목 오인 수정 — '첫 줄이고 80자 미만'이면 무조건
+#      작품 제목으로 렌더해서, [CHAPTER n] 헤더가 빠진 Unit에서
+#      첫 대사가 16pt 굵게 중앙정렬로 박혀 나갔다. (UNIT 02 실제 사고)
+#      _looks_like_doc_title()로 실제 제목일 때만 제목 처리.
+#   4. 상태 메시지 sticky 해소 — '결과가 중간에서 끊겼습니다' 오류가
+#      다음 set_status()까지 화면 상단에 영구히 남았다. 1회 표시 후 소거.
+#   5. Chapter 1 병합 경로 품질 경고 연결 — v3.14까지 리포트만 조용히
+#      저장해 '있었다' 16회(임계치 10)가 그대로 통과했다.
+#   6. AUTO_REGEN_MAX_RETRIES 1 → 2.
+#   7. M17 Continuity Ledger — generate_continuity_ledger() /
+#      gather_continuity_ledger(). 착의·소지품·위치·시각·날씨·인지 원장을
+#      Unit 확정 시 추출해 다음 Unit 프롬프트에 주입. STEP 5에서 작가가
+#      직접 수정 가능. session_state 키 'continuity_ledger' 신규.
+#   8. 진단 지표 4종 추가 — 신체반응 어휘(임계 6) / 서술자 라벨링(1) /
+#      회상 마커(3) / 잔여 마커(0). 실측 검증: UNIT 01 신체반응 11회·
+#      회상 마커 4회·잔여 마커 2개, UNIT 02 서술자 라벨링 2회 검출.
+#   9. STEP 5 도구 3종 신설 — [이 Unit 재검사] [본문 정리] [상태 원장 생성].
+#
+# © 2026 BLUE JEANS PICTURES. All rights reserved.
+# ─────────────────────────────────────────────────────────────
+
 import streamlit as st
 
 try:
@@ -32,6 +67,11 @@ from prompt import (
     build_ch1_stage_c_prompt,
     build_metric_watchlist_block,
     SIGNATURE_FOOD_OPENING_BLOCK,
+    # v3.15 신규 (M17 / M19)
+    extract_unit_blueprint,
+    build_blueprint_adherence_block,
+    build_continuity_ledger_prompt,
+    build_continuity_block,
     # v3.0 신규
     NOVEL_ENGINE_VERSION,
     NOVEL_ENGINE_BUILD_DATE,
@@ -145,9 +185,32 @@ BJND_THRESHOLDS = {
     "마치처럼": 1,       # "마치~처럼"/"~듯했다"/"~같았다" 합계
     "현재형": 3,         # 현재형 종결 (치명적)
     "계량수치": 2,       # v3.12 M15 — 숫자+계량단위 / 소수점 (서술문)
+    # v3.15 신규 진단 지표
+    "신체반응": 6,       # 손끝·심장·등골·목덜미 등 신체 반응 어휘 (M11 보강)
+    "기억오류": 1,       # "~하지는 않았다" 류 감정 라벨링·기억 오류 장치 (M18)
+    "회상마커": 3,       # Chapter 1 회상 진입 마커 (M12 / Stage B 회상 금지)
 }
 
-AUTO_REGEN_MAX_RETRIES = 1  # 자동 재생성 시도 최대 횟수
+AUTO_REGEN_MAX_RETRIES = 2  # v3.15 — 1회로는 임계치 초과가 통과되는 사례가 있어 2회로 상향
+
+# v3.15 신규 진단 정규식
+# ① 신체 반응 어휘 — 같은 부위로만 감정을 번역하는 클리셰 반복 감지.
+#    실측: 《사랑한다고 했잖아》 UNIT 01·02에서 "손끝" 10회, 심장 비유 중복.
+BODY_REACTION_RE = re.compile(
+    r"(손끝|손가락 끝|심장|가슴이 (?:쿵|철렁)|늑골|갈비뼈|등골|등이 (?:서늘|차가)|"
+    r"목덜미|뒷목|숨이 (?:막|멎)|어깨가 (?:굳|움츠))"
+)
+# ② 감정 라벨링 / 기억 오류 장치 — 서술자가 독자에게 정답을 짚어주는 구문.
+#    강력한 장치지만 반복되면 기법이 노출된다. Unit당 1회까지.
+NARRATOR_LABEL_RE = re.compile(
+    r"(?:이라고|라고|으로)?\s*(?:이름 붙이지|명명하지|따져보지|묻지|생각하지|"
+    r"헤아리지|의심하지|확인하지)\s*(?:는)?\s*않았다"
+)
+# ③ Chapter 1 회상 진입 마커 — Stage B는 회상 절대 금지, Chapter 1 전체도 30% 제한.
+FLASHBACK_MARKER_RE = re.compile(
+    r"(지난(?:달|주|해|번)에도|그때도|어릴 때|어린 시절|처음 만났을 때|"
+    r"몇 년 전|넉 달 전|반년 전|작년|재작년|그 무렵|예전에|한때)"
+)
 
 # v3.12 M15 / v3.13 M15-B — 계량 수치 감지 정규식
 # 본문 검사(analyze_unit_quality)와 자료 스캔(scan_metric_expressions)의
@@ -455,6 +518,9 @@ DEFAULT_STATE = {
     "title_review": "",
     "status_message": "",
     "status_type": "info",
+    "status_shown": False,   # v3.15 — 상태 메시지 1회 표시 후 소거용
+    # v3.15 M17 Continuity Ledger — Unit별 물리 상태 원장 (문자열 키)
+    "continuity_ledger": {},
     # v3.1 시나리오 → 소설화 모드 상태
     "scenario_text": "",           # 업로드된 시나리오 원문
     "scenario_stats": {},          # 통계
@@ -550,6 +616,7 @@ def apply_extracted_to_fields(ex: dict) -> None:
 _SAVE_EXCLUDE_KEYS = {
     "status_message",
     "status_type",
+    "status_shown",   # v3.15
 }
 
 
@@ -939,6 +1006,93 @@ def analyze_unit_quality(text: str) -> dict:
     # ── 분량 ──
     stats["총 글자수"] = len(text)
 
+    # ══════════════════════════════════════════════════════
+    # v3.15 신규 진단 지표 3종
+    # ══════════════════════════════════════════════════════
+
+    # ① 신체 반응 어휘 반복 (M11 보강)
+    #    실측 배경: 《사랑한다고 했잖아》 UNIT 01에서 "손끝" 7회,
+    #    UNIT 02에서 3회. "손끝이 차가웠다/굳었다/얼어붙었다"가 한 Unit 안에서 돌았다.
+    #    "심장이 늑골을 두드렸다"(01) ↔ "심장이 갈비뼈를 쳤다"(02)처럼
+    #    같은 비유를 부위 이름만 바꿔 재사용하는 사고도 여기서 잡는다.
+    body_hits = BODY_REACTION_RE.findall(text)
+    cnt_body = len(body_hits)
+    stats["신체반응 어휘"] = cnt_body
+    if cnt_body > BJND_THRESHOLDS["신체반응"]:
+        # 어떤 어휘가 몰렸는지 상위 3개를 함께 보여준다.
+        top = sorted(
+            {w: body_hits.count(w) for w in set(body_hits)}.items(),
+            key=lambda kv: -kv[1],
+        )[:3]
+        detail = ", ".join(f"{w} {c}회" for w, c in top)
+        issues.append(
+            f"⚠️ 신체 반응 어휘 {cnt_body}회 ({detail}) — "
+            f"{BJND_THRESHOLDS['신체반응']}회 이하로. 감정을 같은 부위로만 번역하지 마세요."
+        )
+        violations["신체반응"] = {
+            "count": cnt_body,
+            "threshold": BJND_THRESHOLDS["신체반응"],
+            "severity": "medium",
+        }
+
+    # ② 감정 라벨링 / 기억 오류 장치 (M18)
+    #    "위화감이라고 이름 붙이지는 않았다", "그 차이가 어디서 오는지 따져보지 않았다"
+    #    — 그루밍 서사에서 강력한 장치지만 반복되면 서술자가 독자에게
+    #    정답을 짚어주는 개입이 된다.
+    cnt_label = len(NARRATOR_LABEL_RE.findall(text))
+    stats["서술자 라벨링"] = cnt_label
+    if cnt_label > BJND_THRESHOLDS["기억오류"]:
+        issues.append(
+            f"⚠️ 서술자 라벨링 구문 {cnt_label}회 — "
+            f"{BJND_THRESHOLDS['기억오류']}회까지. 반복하면 기법이 노출됩니다. (M18)"
+        )
+        violations["기억오류"] = {
+            "count": cnt_label,
+            "threshold": BJND_THRESHOLDS["기억오류"],
+            "severity": "medium",
+        }
+
+    # ③ 회상 진입 마커 (M12 / Chapter 1 Stage B 회상 금지)
+    #    Chapter 1은 현재 시간대만 다루는데 "지난달에도 그랬다"류 회상 블록이
+    #    Stage B에 들어간 사례가 있었다. 카운터가 없어 감지되지 않았다.
+    cnt_fb = len(FLASHBACK_MARKER_RE.findall(text))
+    stats["회상 마커"] = cnt_fb
+    if cnt_fb > BJND_THRESHOLDS["회상마커"]:
+        issues.append(
+            f"⚠️ 회상 진입 마커 {cnt_fb}회 — 회상이 Unit 분량의 30%를 넘지 않는지 "
+            f"확인하세요. Chapter 1이면 회상 자체를 재검토하세요. (M12)"
+        )
+        violations["회상마커"] = {
+            "count": cnt_fb,
+            "threshold": BJND_THRESHOLDS["회상마커"],
+            "severity": "low",
+        }
+
+    # ④ 잔여 마커 검출 (v3.15) — 본문 중간 '끝.' / 마크다운 잔재
+    #    Stage A·B가 '끝.'을 출력해 병합본 한가운데에 박힌 사고,
+    #    첫 줄이 **"대사"** 형태로 나간 사고를 표면화한다.
+    stray_end = len(re.findall(r"(?<!\A)^\s*끝\.\s*$", text.strip(), re.M))
+    # 마지막 줄의 '끝.'은 정상(Unit 12/13)이므로 제외
+    if text.strip().endswith("끝.") and stray_end > 0:
+        stray_end -= 1
+    cnt_md = len(re.findall(r"\*\*|^#{1,6}\s|^---\s*$", text, re.M))
+    stats["잔여 마커"] = stray_end + cnt_md
+    if stray_end > 0 or cnt_md > 0:
+        parts = []
+        if stray_end:
+            parts.append(f"본문 중간 '끝.' {stray_end}개")
+        if cnt_md:
+            parts.append(f"마크다운 기호 {cnt_md}개")
+        issues.append(
+            "⚠️ 잔여 마커 검출 — " + " / ".join(parts) +
+            ". [본문 정리] 버튼으로 제거할 수 있습니다."
+        )
+        violations["잔여마커"] = {
+            "count": stray_end + cnt_md,
+            "threshold": 0,
+            "severity": "low",
+        }
+
     # v3.0 신규: 자동 재생성 트리거 판정
     # severity가 "critical" 또는 "high"인 violation이 있으면 재생성 대상
     should_regenerate = any(
@@ -952,6 +1106,88 @@ def analyze_unit_quality(text: str) -> dict:
         "violations": violations,
         "should_regenerate": should_regenerate,
     }
+
+
+# =====================================================================
+# v3.15 — 본문 정리기 (후처리)
+# =====================================================================
+def sanitize_manuscript(text: str, is_final_unit: bool = False) -> tuple:
+    """생성 결과에서 마커 잔재를 걷어낸다. (v3.15)
+
+    배경 — 두 가지 사고가 실제로 발생했다.
+      ① Stage A·B가 각각 마지막 줄에 '끝.'을 출력해, Chapter 1 병합본
+         한가운데에 '끝.'이 두 번 박혔다. (저장 JSON에서 직접 확인)
+      ② UNIT 02 첫 줄이 **"얼굴이 왜 그래."** 형태로 나가 DOCX에
+         별표가 그대로 들어갔다.
+
+    ★ 작업 규칙 7 준수 — 본문 내용은 건드리지 않는다. ★
+    제거 대상은 '원고가 아닌 마커'뿐이다. 문장, 어휘, 문단 구조는
+    한 글자도 바꾸지 않는다.
+
+    Args:
+        text: 원본 텍스트
+        is_final_unit: True면 맨 마지막 줄의 '끝.'은 보존한다 (Unit 12/13)
+
+    Returns:
+        (정리된 텍스트, 변경 내역 리스트)
+    """
+    if not text or not text.strip():
+        return text, []
+
+    log = []
+    out = text
+
+    # ── ① 강조 마크다운 제거 (**bold** / *italic* 감싸기) ──
+    #     별표 안의 내용은 그대로 두고 별표만 벗긴다.
+    n_bold = len(re.findall(r"\*\*(.+?)\*\*", out, re.S))
+    if n_bold:
+        out = re.sub(r"\*\*(.+?)\*\*", r"\1", out, flags=re.S)
+        log.append(f"굵게 표시 마크다운 {n_bold}개 제거")
+
+    # ── ② 헤딩·수평선 마커 제거 (줄 전체가 마커인 경우만) ──
+    n_hr = len(re.findall(r"^\s*(?:---+|===+|\*\*\*+)\s*$", out, re.M))
+    if n_hr:
+        out = re.sub(r"^\s*(?:---+|===+|\*\*\*+)\s*$", "", out, flags=re.M)
+        log.append(f"수평선 마커 {n_hr}개 제거")
+
+    # 헤딩은 [CHAPTER n] 첫 줄을 건드리면 안 되므로 '#' 접두만 벗긴다.
+    n_head = len(re.findall(r"^\s*#{1,6}\s+", out, re.M))
+    if n_head:
+        out = re.sub(r"^\s*#{1,6}\s+", "", out, flags=re.M)
+        log.append(f"헤딩 기호 {n_head}개 제거")
+
+    # ── ③ 본문 중간의 '끝.' 제거 ──
+    lines = out.split("\n")
+    # 마지막 비어있지 않은 줄의 인덱스
+    last_idx = -1
+    for i in range(len(lines) - 1, -1, -1):
+        if lines[i].strip():
+            last_idx = i
+            break
+
+    removed_end = 0
+    kept_final = False
+    for i, ln in enumerate(lines):
+        if ln.strip() in ("끝.", "끝", "— 끝 —", "-끝-"):
+            if is_final_unit and i == last_idx:
+                kept_final = True
+                continue
+            lines[i] = ""
+            removed_end += 1
+    if removed_end:
+        out = "\n".join(lines)
+        note = f"본문 중간 '끝.' {removed_end}개 제거"
+        if kept_final:
+            note += " (마지막 줄 '끝.'은 보존)"
+        log.append(note)
+
+    # ── ④ 3줄 이상 연속 공백을 2줄로 정리 ──
+    #     위 제거 과정에서 생긴 빈 줄만 정돈한다.
+    if re.search(r"\n{4,}", out):
+        out = re.sub(r"\n{4,}", "\n\n\n", out)
+        log.append("과다 공백 줄 정리")
+
+    return out.strip(), log
 
 
 def build_retry_hint(violations: dict) -> str:
@@ -1041,6 +1277,63 @@ def build_retry_hint(violations: dict) -> str:
 # ─────────────────────────────────────
 # Unit 요약 자동 생성
 # ─────────────────────────────────────
+def generate_continuity_ledger(unit_no: int, text: str) -> str:
+    """완성된 Unit에서 연속성 상태 원장을 추출해 저장한다. (v3.15 M17)
+
+    unit_summaries는 '줄거리 요약'이라 물리 상태를 추적하지 못한다.
+    실제 사고 — UNIT 01에서 지윤이 앞치마를 '입고' 있었는데 UNIT 02가
+    "앞치마는 접어 가방에 넣은 채였다"로 시작했고, 그 한 줄이 UNIT 02
+    서스펜스 전체의 근거라 챕터 논리가 무너졌다.
+
+    원장은 시각·날씨·위치·착의·소지품·신체·통신·인지·독자·미회수
+    10개 항목으로, 다음 Unit 집필 프롬프트에 HARD 블록으로 주입된다.
+    """
+    client = get_client()
+    if not client or not text or not text.strip():
+        return ""
+    try:
+        prev = gather_continuity_ledger(before_unit=unit_no)
+        prompt = build_continuity_ledger_prompt(unit_no, text[:12000], prev)
+        resp = client.messages.create(
+            model=os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5"),
+            max_tokens=1500,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        ledger = response_text(resp).strip()
+        if ledger:
+            if "continuity_ledger" not in st.session_state:
+                st.session_state["continuity_ledger"] = {}
+            st.session_state["continuity_ledger"][f"{unit_no:02d}"] = ledger
+        return ledger
+    except Exception:
+        return ""
+
+
+def gather_continuity_ledger(before_unit: int) -> str:
+    """before_unit 직전까지의 상태 원장을 모아 반환한다. (v3.15 M17)
+
+    사고 패턴 A 대응 — session_state는 정수 키, JSON 로드는 문자열 키라서
+    양쪽 표기를 모두 조회한다.
+
+    가장 최근 원장 1개를 우선으로 쓰되, 그 앞 원장 1개까지 함께 넘겨
+    2단계 전의 미회수 복선도 놓치지 않게 한다.
+    """
+    led = st.session_state.get("continuity_ledger", {}) or {}
+    if not led:
+        return ""
+    picked = []
+    for n in range(int(before_unit) - 1, 0, -1):
+        txt = led.get(f"{n:02d}") or led.get(str(n)) or led.get(n) or ""
+        if isinstance(txt, str) and txt.strip():
+            picked.append((n, txt.strip()))
+        if len(picked) >= 2:
+            break
+    if not picked:
+        return ""
+    picked.reverse()
+    return "\n\n".join(f"[UNIT {n:02d} 종료 시점 원장]\n{t}" for n, t in picked)
+
+
 def generate_unit_summary(unit_no: int, text: str) -> str:
     """완성된 Unit의 1줄 요약을 생성한다."""
     client = get_client()
@@ -1396,6 +1689,35 @@ def export_clean_content(content: str) -> str:
     return result
 
 
+def _looks_like_doc_title(line: str, title: str) -> bool:
+    """첫 줄을 '작품 제목'으로 렌더해도 되는지 판정한다. (v3.15)
+
+    제목이 아닌데 제목으로 처리하면 본문 첫 문장이 표지 제목 자리에
+    16pt 굵게 중앙정렬로 박혀 나간다. 아래 조건을 모두 통과해야 제목이다.
+      · 대사 부호로 시작하지 않는다 (대사는 제목이 될 수 없다)
+      · 문장 종결부호로 끝나지 않는다
+      · 40자 미만
+      · 그리고 (전달받은 작품 제목과 일치) 또는 (제목 형태 라벨)
+    """
+    s = (line or "").strip()
+    if not s or len(s) >= 40:
+        return False
+    if s[0] in '"\u201c\u300c\u2018\u201a\'\u300e(':
+        return False
+    if s[-1] in ".!?\u3002\uff01\uff1f\u201d\u300d":
+        return False
+
+    def _norm(t):
+        return re.sub(r"[\s《》<>\[\]—·\-]+", "", (t or "")).lower()
+
+    if title and _norm(s) and _norm(s) in _norm(title):
+        return True
+    # [CHAPTER n] / 제1장 같은 구조 라벨은 아래 전용 분기가 처리하므로 제외
+    if s.startswith("[CHAPTER") or re.match(r"^제?\s*\d+\s*[장화부]", s):
+        return False
+    return False
+
+
 def export_docx(title: str, content: str) -> bytes:
     """한국 소설 원고 표준 DOCX — MS Word 소설 원고 포맷"""
     from docx.shared import Pt, Cm
@@ -1488,12 +1810,18 @@ def export_docx(title: str, content: str) -> bytes:
             continue
 
         # 작품 제목 (첫 줄)
-        if is_first_line and len(s) < 80:
-            add_centered(s, size=16, bold=True, before=72, after=24)
+        # v3.15 수정 — 기존에는 '첫 줄이고 80자 미만'이면 무조건 작품 제목으로
+        # 취급해 중앙정렬·굵게·16pt로 렌더했다. 그래서 모델이 [CHAPTER n] 헤더를
+        # 빼먹은 Unit에서는 첫 대사("얼굴이 왜 그래.")가 작품 제목 자리에
+        # 커다랗게 박혀 나갔다. (실제 사고 — UNIT 02 DOCX)
+        # 이제 첫 줄이 실제로 제목일 때만 제목으로 처리한다.
+        if is_first_line:
             is_first_line = False
-            i += 1
-            continue
-        is_first_line = False
+            if _looks_like_doc_title(s, title):
+                add_centered(s, size=16, bold=True, before=72, after=24)
+                i += 1
+                continue
+            # 제목이 아니면 아래 일반 처리로 흘려보낸다.
 
         # 챕터 제목: [CHAPTER X] — ...
         if s.startswith("[CHAPTER"):
@@ -1563,12 +1891,32 @@ def parse_chapter_title(text: str) -> tuple:
 def set_status(message: str, status_type: str = "info") -> None:
     st.session_state["status_message"] = message
     st.session_state["status_type"] = status_type
+    # v3.15 — 새 메시지는 아직 표시되지 않았음을 표시한다.
+    st.session_state["status_shown"] = False
+
+
+def clear_status() -> None:
+    """상태 메시지를 즉시 지운다. (v3.15)"""
+    st.session_state["status_message"] = ""
+    st.session_state["status_type"] = "info"
+    st.session_state["status_shown"] = False
 
 
 def render_status() -> None:
+    """상태 메시지를 표시한다.
+
+    v3.15 — 기존에는 다음 set_status()가 호출될 때까지 메시지가 화면 상단에
+    영구히 남았다. 특히 '결과가 중간에서 끊겼습니다' 오류가 한 번 뜨면
+    이후 정상 작업 중에도 계속 붙어 있어 작가가 진행 중인 문제로 오해했다.
+    이제 한 번 표시된 뒤에는 자동으로 소거된다.
+    """
     msg = st.session_state.get("status_message", "").strip()
     status_type = st.session_state.get("status_type", "info")
     if not msg:
+        return
+    if st.session_state.get("status_shown"):
+        # 이미 한 번 표시된 메시지 — 지우고 렌더하지 않는다.
+        clear_status()
         return
     if status_type == "success":
         st.success(msg)
@@ -1578,6 +1926,7 @@ def render_status() -> None:
         st.warning(msg)
     else:
         st.info(msg)
+    st.session_state["status_shown"] = True
 
 
 def run_with_status(start_message: str, done_message: str, fn):
@@ -1725,9 +2074,22 @@ with st.sidebar:
 - 대사태그 ≤ {BJND_THRESHOLDS['대사태그']}회/Unit
 - 현재형 ≤ {BJND_THRESHOLDS['현재형']}회/Unit (치명적)
 - 계량수치 ≤ {BJND_THRESHOLDS['계량수치']}회/Unit (M15)
+- 신체반응 ≤ {BJND_THRESHOLDS['신체반응']}회/Unit (v3.15)
+- 서술자라벨링 ≤ {BJND_THRESHOLDS['기억오류']}회/Unit (M18)
+- 회상마커 ≤ {BJND_THRESHOLDS['회상마커']}회/Unit (M12)
 """
     )
-    st.caption("임계치 초과 시 자동 재생성 1회")
+    st.caption(f"임계치 초과 시 자동 재생성 {AUTO_REGEN_MAX_RETRIES}회")
+
+    st.markdown("**v3.15 신규**")
+    _led_cnt = len([v for v in (st.session_state.get("continuity_ledger", {}) or {}).values() if v])
+    st.markdown(
+        f"""
+- M19 설계안 준수 — Chapter 1 포함 전 경로 주입
+- M17 연속성 원장 — {_led_cnt}개 Unit 기록됨
+- M18 서술 거리 — 과잉노출·부당은폐 차단
+"""
+    )
 
 # ─────────────────────────────────────
 # v3.4 프로젝트 저장 / 불러오기
@@ -2756,10 +3118,16 @@ if selected_unit == "01":
                     metric_watchlist=metric_watchlist_block,
                     # v3.14 M16
                     food_signature=st.session_state.get("signature_food_opening", True),
+                    # v3.15 M19 — UNIT 01 설계안 주입 (v3.14까지 미전달이던 경로)
+                    all_blueprints_text=all_blueprints_text,
                 )
                 return llm_call(prompt, max_tokens=MAX_TOKENS_LONG, use_opus=True)
             result = run_with_status("Stage A: PEAK 오프닝을 생성 중입니다...", "Stage A 생성 완료.", _job)
             if result:  # v3.4.1 — 빈 문자열도 저장하지 않는다
+                # v3.15 — Stage 단위에서 '끝.'·마크다운 잔재를 즉시 걷어낸다
+                result, _slog = sanitize_manuscript(result, is_final_unit=False)
+                if _slog:
+                    st.caption("본문 정리: " + " / ".join(_slog))
                 st.session_state["ch1_stage_a"] = result
 
     with ch1_b:
@@ -2780,10 +3148,16 @@ if selected_unit == "01":
                     period_keys=active_period_keys,
                     # v3.13 M15-B
                     metric_watchlist=metric_watchlist_block,
+                    # v3.15 M19
+                    all_blueprints_text=all_blueprints_text,
                 )
                 return llm_call(prompt, max_tokens=MAX_TOKENS_LONG, use_opus=True)
             result = run_with_status("Stage B: WORLD 전개를 생성 중입니다...", "Stage B 생성 완료.", _job)
             if result:  # v3.4.1 — 빈 문자열도 저장하지 않는다
+                # v3.15 — Stage B가 출력한 '끝.'이 병합본 중간에 박히던 사고 차단
+                result, _slog = sanitize_manuscript(result, is_final_unit=False)
+                if _slog:
+                    st.caption("본문 정리: " + " / ".join(_slog))
                 st.session_state["ch1_stage_b"] = result
 
     with ch1_c:
@@ -2805,10 +3179,15 @@ if selected_unit == "01":
                     period_keys=active_period_keys,
                     # v3.13 M15-B
                     metric_watchlist=metric_watchlist_block,
+                    # v3.15 M19
+                    all_blueprints_text=all_blueprints_text,
                 )
                 return llm_call(prompt, max_tokens=MAX_TOKENS_LONG, use_opus=True)
             result = run_with_status("Stage C: LOSS 균열을 생성 중입니다...", "Stage C 생성 완료.", _job)
             if result:  # v3.4.1 — 빈 문자열도 저장하지 않는다
+                result, _slog = sanitize_manuscript(result, is_final_unit=False)
+                if _slog:
+                    st.caption("본문 정리: " + " / ".join(_slog))
                 st.session_state["ch1_stage_c"] = result
 
     # 각 Stage 미리보기
@@ -2830,6 +3209,13 @@ if selected_unit == "01":
                 + "\n\n"
                 + st.session_state["ch1_stage_c"].strip()
             )
+            # v3.15 — 병합 직후 잔여 마커 정리 (2차 방어)
+            # Stage 단위에서 이미 걷어내지만, 옛 세션에서 이어받은 Stage 텍스트나
+            # 작가가 직접 붙여넣은 텍스트에도 '끝.'이 남아 있을 수 있다.
+            merged, merge_log = sanitize_manuscript(merged, is_final_unit=False)
+            if merge_log:
+                st.info("병합 시 정리한 항목 — " + " / ".join(merge_log))
+
             # 챕터 제목 파싱
             ch_title, ch_body = parse_chapter_title(merged)
             if ch_title:
@@ -2842,12 +3228,33 @@ if selected_unit == "01":
             final_text = ch_body if ch_title else merged
             qr = analyze_unit_quality(final_text)
             st.session_state["quality_report"] = qr
+
+            # v3.15 — Chapter 1 경로에도 임계치 초과 경고를 붙인다.
+            # v3.14까지는 리포트만 조용히 저장해서, '있었다' 16회(임계치 10)가
+            # 그대로 통과했다. Stage 단위 재생성이 필요하므로 자동 재생성은
+            # 하지 않고, 어느 Stage를 다시 뽑아야 하는지 작가에게 알린다.
+            if qr.get("should_regenerate"):
+                _hard = [
+                    f"{k} {v.get('count')}회 (임계치 {v.get('threshold')})"
+                    for k, v in qr.get("violations", {}).items()
+                    if v.get("severity") in ("critical", "high")
+                ]
+                st.error(
+                    "⚠️ **BJND 임계치 초과 상태로 저장되었습니다.** — "
+                    + " / ".join(_hard)
+                    + "  \n원고는 저장됐으니 그대로 두셔도 되고, Stage를 다시 뽑아 "
+                    "교체하셔도 됩니다. 어느 Stage에서 몰렸는지는 아래 Stage 보기에서 "
+                    "확인할 수 있습니다."
+                )
+
             # Unit 요약 자동 생성
             summary = generate_unit_summary(1, final_text)
             if summary:
                 if "unit_summaries" not in st.session_state:
                     st.session_state["unit_summaries"] = {}
                 st.session_state["unit_summaries"]["01"] = summary
+            # v3.15 M17 — 연속성 상태 원장 생성
+            generate_continuity_ledger(1, final_text)
             # 캐릭터 등장 추적
             track_characters("01", final_text)
 
@@ -2881,6 +3288,10 @@ else:
                     _job,
                 )
                 if result:  # v3.4.1 — 빈 문자열도 저장하지 않는다
+                    # v3.15 — 에필로그는 마지막 '끝.'을 보존한다.
+                    result, _slog = sanitize_manuscript(result, is_final_unit=True)
+                    if _slog:
+                        st.caption("본문 정리: " + " / ".join(_slog))
                     ch_title, ch_body = parse_chapter_title(result)
                     st.session_state["unit_drafts"][selected_unit] = ch_body if ch_title else result
                     if ch_title:
@@ -2913,6 +3324,8 @@ else:
                         metric_watchlist=metric_watchlist_block,
                         food_signature=st.session_state.get("signature_food_opening", True),
                         retry_hint="",
+                        # v3.15 M17 — 직전까지의 물리 상태 원장 주입
+                        continuity_ledger=gather_continuity_ledger(unit_no),
                     )
                     first_result = generate_or_expand_unit(unit_no, prompt)
 
@@ -2954,6 +3367,8 @@ else:
                                 metric_watchlist=metric_watchlist_block,
                                 food_signature=st.session_state.get("signature_food_opening", True),
                                 retry_hint=retry_hint,
+                                # v3.15 M17
+                                continuity_ledger=gather_continuity_ledger(unit_no),
                             )
                             retry_result = generate_or_expand_unit(unit_no, retry_prompt)
 
@@ -2984,6 +3399,10 @@ else:
                     _job,
                 )
                 if result:  # v3.4.1 — 빈 문자열도 저장하지 않는다
+                    # v3.15 — 잔여 마커 정리. Unit 12는 마지막 '끝.'을 보존한다.
+                    result, _slog = sanitize_manuscript(result, is_final_unit=(unit_no in (12, 13)))
+                    if _slog:
+                        st.caption("본문 정리: " + " / ".join(_slog))
                     ch_title, ch_body = parse_chapter_title(result)
                     st.session_state["unit_drafts"][selected_unit] = ch_body if ch_title else result
                     if ch_title:
@@ -3003,6 +3422,8 @@ else:
                         if "unit_summaries" not in st.session_state:
                             st.session_state["unit_summaries"] = {}
                         st.session_state["unit_summaries"][selected_unit] = summary
+                    # v3.15 M17 — 연속성 상태 원장 생성
+                    generate_continuity_ledger(unit_no, check_text)
                     # 캐릭터 등장 추적
                     track_characters(selected_unit, check_text)
 
@@ -3053,6 +3474,74 @@ if current_draft:
     )
     with st.expander(f"{label} 보기", expanded=True):
         st.text_area("원고", value=current_draft, height=420, label_visibility="collapsed")
+
+    # ── v3.15 신규 도구 3종 ──
+    # 작업 규칙 7 준수 — 본문 문장은 자동으로 고치지 않는다.
+    # 마커 제거·재검사·원장 생성만 제공하고, 문장 수정은 작가가 직접 한다.
+    tool_c1, tool_c2, tool_c3 = st.columns(3)
+
+    with tool_c1:
+        if st.button("🔍 이 Unit 재검사", use_container_width=True, key="requalify_btn"):
+            st.session_state["quality_report"] = analyze_unit_quality(current_draft)
+            set_status(f"UNIT {selected_unit} 재검사 완료.", "success")
+
+    with tool_c2:
+        # 정리할 것이 있는지 미리 계산해 버튼 상태를 결정한다.
+        _preview, _plog = sanitize_manuscript(
+            current_draft, is_final_unit=(selected_unit in ("12", "13"))
+        )
+        if st.button(
+            "🧹 본문 정리",
+            use_container_width=True,
+            disabled=not _plog,
+            key="sanitize_btn",
+            help="본문 중간 '끝.'과 마크다운 기호만 제거합니다. 문장은 건드리지 않습니다.",
+        ):
+            st.session_state["unit_drafts"][selected_unit] = _preview
+            st.session_state["quality_report"] = analyze_unit_quality(_preview)
+            set_status("본문 정리 완료 — " + " / ".join(_plog), "success")
+            st.rerun()
+        if _plog:
+            st.caption("정리 대상: " + " / ".join(_plog))
+        else:
+            st.caption("정리할 마커 없음")
+
+    with tool_c3:
+        if st.button(
+            "📋 상태 원장 생성",
+            use_container_width=True,
+            key="ledger_btn",
+            help="다음 Unit 집필 시 착의·소지품·시각·날씨가 어긋나지 않도록 원장을 만듭니다. (M17)",
+        ):
+            with st.spinner("연속성 상태 원장을 추출 중입니다..."):
+                _led = generate_continuity_ledger(int(selected_unit), current_draft)
+            if _led:
+                set_status(f"UNIT {selected_unit} 상태 원장 생성 완료.", "success")
+            else:
+                set_status("상태 원장 생성에 실패했습니다. API 키와 연결을 확인하세요.", "error")
+
+    # 저장된 원장 표시
+    _led_saved = (st.session_state.get("continuity_ledger", {}) or {}).get(
+        f"{int(selected_unit):02d}", ""
+    )
+    if _led_saved:
+        with st.expander(f"📋 UNIT {selected_unit} 연속성 상태 원장 (M17)", expanded=False):
+            st.caption(
+                "다음 Unit 집필 프롬프트에 그대로 주입됩니다. "
+                "사실이 틀렸으면 아래에서 직접 고쳐주세요."
+            )
+            _led_edit = st.text_area(
+                "상태 원장",
+                value=_led_saved,
+                height=280,
+                label_visibility="collapsed",
+                key=f"ledger_edit_{selected_unit}",
+            )
+            if _led_edit != _led_saved:
+                if st.button("원장 수정 저장", key=f"ledger_save_{selected_unit}"):
+                    st.session_state["continuity_ledger"][f"{int(selected_unit):02d}"] = _led_edit
+                    set_status(f"UNIT {selected_unit} 원장을 수정했습니다.", "success")
+                    st.rerun()
 
 # 품질 리포트 표시
 qr = st.session_state.get("quality_report", {})

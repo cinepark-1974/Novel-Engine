@@ -37,6 +37,21 @@ from typing import Optional, List
 #      회상 마커 4회·잔여 마커 2개, UNIT 02 서술자 라벨링 2회 검출.
 #   9. STEP 5 도구 3종 신설 — [이 Unit 재검사] [본문 정리] [상태 원장 생성].
 #
+# v3.15.1 (2026-07-26) — 챕터 제목 폴백 + 교차 Unit 반복 진단 + 통합본 정리
+#   1. 챕터 제목 폴백 — 모델이 [CHAPTER n] 헤더를 빼먹으면 chapter_titles가
+#      빈 값으로 남는다. extract_blueprint_chapter_title()로 설계안의
+#      확정 제목을 채운다. Chapter 1 병합 경로와 Unit 02~12 경로 양쪽 적용.
+#      실측: 실제 설계 파일에서 UNIT 01~10 제목 10개 전부 추출 성공.
+#   2. analyze_cross_unit_repetition() 신설 — analyze_unit_quality()는 한 Unit
+#      내부만 본다. 실제 사고는 Unit을 건너뛰며 났다.
+#      "심장이 늑골을 두드렸다"(01) ↔ "심장이 갈비뼈를 쳤다"(02) — 같은 말이다.
+#      동의어군 6종 + 특징 어구(6~14자) 재사용을 직전 3개 Unit과 대조.
+#      실측: UNIT 02 검사에서 손끝(7→3회)·심장(2→2회)·겹치는 어구 6건 검출.
+#      사고 패턴 A 대응 — 정수 키·문자열 키 양쪽 조회.
+#   3. final_manuscript_text()에 sanitize_manuscript() 적용 — 옛 Unit 본문의
+#      중간 '끝.'이 STEP 7 통합본에 그대로 실려 나가던 문제. 마지막 '끝.'은 보존.
+#   ★ 세 항목 모두 진단·도구 제공에 그치고 본문 문장은 수정하지 않는다. ★
+#
 # © 2026 BLUE JEANS PICTURES. All rights reserved.
 # ─────────────────────────────────────────────────────────────
 
@@ -69,6 +84,7 @@ from prompt import (
     SIGNATURE_FOOD_OPENING_BLOCK,
     # v3.15 신규 (M17 / M19)
     extract_unit_blueprint,
+    extract_blueprint_chapter_title,
     build_blueprint_adherence_block,
     build_continuity_ledger_prompt,
     build_continuity_block,
@@ -1277,6 +1293,88 @@ def build_retry_hint(violations: dict) -> str:
 # ─────────────────────────────────────
 # Unit 요약 자동 생성
 # ─────────────────────────────────────
+def analyze_cross_unit_repetition(unit_no: int, text: str, window: int = 3) -> list:
+    """직전 Unit들과 겹치는 표현을 찾아낸다. (v3.15.1)
+
+    배경 — analyze_unit_quality()는 한 Unit 안의 반복만 본다.
+    실제 사고는 Unit을 건너뛰며 났다.
+      · "심장이 늑골을 두드렸다"(UNIT 01) ↔ "심장이 갈비뼈를 쳤다"(UNIT 02)
+        — 늑골과 갈비뼈는 같은 말이다. 부위 이름만 바꾼 동일 비유 재사용.
+      · "손끝이 차가웠다 / 굳었다 / 얼어붙었다"가 두 Unit에 걸쳐 반복.
+    독자는 Unit 경계를 의식하지 않으므로, 이어 읽으면 즉시 눈에 걸린다.
+
+    ★ 진단만 한다. 본문은 고치지 않는다 (작업 규칙 7). ★
+
+    Args:
+        unit_no: 검사 대상 Unit 번호
+        text: 검사 대상 Unit 본문
+        window: 몇 개 앞 Unit까지 대조할지
+
+    Returns:
+        경고 문자열 리스트
+    """
+    if not text or not text.strip():
+        return []
+
+    drafts = st.session_state.get("unit_drafts", {}) or {}
+    prev_texts = []
+    for n in range(int(unit_no) - 1, max(0, int(unit_no) - 1 - window), -1):
+        t = drafts.get(f"{n:02d}") or drafts.get(str(n)) or drafts.get(n) or ""
+        if isinstance(t, str) and t.strip():
+            prev_texts.append((n, t))
+    if not prev_texts:
+        return []
+
+    warnings = []
+
+    # ── ① 동일 비유 재사용 — 같은 신체 부위군을 같은 방식으로 다시 쓰는 경우 ──
+    # 같은 뜻의 다른 표기를 하나로 묶는다. 늑골 = 갈비뼈, 뒷목 = 목덜미.
+    synonym_groups = {
+        "갈비뼈/늑골": r"(?:늑골|갈비뼈)",
+        "목덜미/뒷목": r"(?:목덜미|뒷목)",
+        "손끝": r"(?:손끝|손가락 끝)",
+        "등골": r"(?:등골|등이 서늘|등이 차가)",
+        "심장": r"심장",
+        "명치": r"명치",
+    }
+    for label, pat in synonym_groups.items():
+        cur = len(re.findall(pat, text))
+        if cur == 0:
+            continue
+        for n, pt in prev_texts:
+            prev_cnt = len(re.findall(pat, pt))
+            if prev_cnt >= 2 and cur >= 2:
+                warnings.append(
+                    f"🔁 '{label}' — UNIT {n:02d}에서 {prev_cnt}회, "
+                    f"이번 Unit에서 {cur}회. 같은 부위로 감정을 반복 번역하고 있습니다."
+                )
+                break
+
+    # ── ② 특징적 어구 재사용 — 5~12자 어구가 앞 Unit에 그대로 있는 경우 ──
+    # 흔한 관용구를 걸러내기 위해 조사·서술어만으로 된 조각은 제외한다.
+    stop = ("그리고", "그러나", "그런데", "하지만", "그래서", "지윤은", "도균은")
+    phrases = set()
+    for m in re.finditer(r"[가-힣]{2,}(?:\s[가-힣]{2,}){1,2}", text):
+        ph = m.group(0)
+        if 6 <= len(ph) <= 14 and not ph.startswith(stop):
+            phrases.add(ph)
+
+    dup = []
+    for n, pt in prev_texts:
+        for ph in phrases:
+            if ph in pt and len(dup) < 6:
+                dup.append((ph, n))
+    if dup:
+        shown = ", ".join(f"'{p}'(UNIT {n:02d})" for p, n in dup[:4])
+        warnings.append(
+            f"🔁 앞 Unit과 겹치는 어구 {len(dup)}건 — {shown}"
+            + (" 외" if len(dup) > 4 else "")
+            + ". 의도한 모티프가 아니면 표현을 바꿔주세요."
+        )
+
+    return warnings
+
+
 def generate_continuity_ledger(unit_no: int, text: str) -> str:
     """완성된 Unit에서 연속성 상태 원장을 추출해 저장한다. (v3.15 M17)
 
@@ -1864,6 +1962,10 @@ def final_manuscript_text(current_title: str) -> str:
     if drafts:
         parts.append(drafts)
     manuscript = "\n\n".join(parts).rstrip()
+    # v3.15.1 — 옛 세션에서 이어받은 Unit 본문에 중간 '끝.'이 남아 있으면
+    # 통합본 한가운데에 그대로 박힌다. 내보내기 직전 한 번 더 걷어낸다.
+    # 본문 문장은 건드리지 않는다 (작업 규칙 7).
+    manuscript, _ = sanitize_manuscript(manuscript, is_final_unit=True)
     if manuscript and not manuscript.endswith("끝."):
         manuscript += "\n\n끝."
     return manuscript
@@ -3223,6 +3325,11 @@ if selected_unit == "01":
                 st.session_state["chapter_titles"]["01"] = ch_title
             else:
                 st.session_state["unit_drafts"]["01"] = merged
+                # v3.15.1 — 설계안 제목으로 폴백
+                _bp_title = extract_blueprint_chapter_title(all_blueprints_text, 1)
+                if _bp_title:
+                    st.session_state["chapter_titles"]["01"] = f"[CHAPTER 1] — {_bp_title}"
+                    st.caption(f"챕터 제목을 설계안에서 가져왔습니다 — {_bp_title}")
             set_status("Chapter 1이 확정되었습니다. UNIT 01로 저장 완료.", "success")
             # 품질 자동 체크
             final_text = ch_body if ch_title else merged
@@ -3407,6 +3514,18 @@ else:
                     st.session_state["unit_drafts"][selected_unit] = ch_body if ch_title else result
                     if ch_title:
                         st.session_state["chapter_titles"][selected_unit] = ch_title
+                    else:
+                        # v3.15.1 — 모델이 [CHAPTER n] 헤더를 빼먹었을 때
+                        # 설계안에 확정된 제목으로 채운다. 비어 있으면 DOCX
+                        # 빌더가 첫 문장을 제목으로 오인할 수 있다.
+                        _bp_title = extract_blueprint_chapter_title(all_blueprints_text, unit_no)
+                        if _bp_title:
+                            st.session_state["chapter_titles"][selected_unit] = (
+                                f"[CHAPTER {unit_no}] — {_bp_title}"
+                            )
+                            st.caption(
+                                f"챕터 제목이 누락되어 설계안 제목으로 채웠습니다 — {_bp_title}"
+                            )
                     check_text = ch_body if ch_title else result
                     if is_incomplete_text(check_text, unit_no):
                         set_status(
@@ -3415,6 +3534,10 @@ else:
                         )
                     # 품질 자동 체크
                     qr = analyze_unit_quality(check_text)
+                    # v3.15.1 — 앞 Unit들과의 교차 반복 진단을 합류시킨다
+                    _cross = analyze_cross_unit_repetition(unit_no, check_text)
+                    if _cross:
+                        qr["issues"] = list(qr.get("issues", [])) + _cross
                     st.session_state["quality_report"] = qr
                     # Unit 요약 자동 생성
                     summary = generate_unit_summary(unit_no, check_text)
@@ -3482,7 +3605,11 @@ if current_draft:
 
     with tool_c1:
         if st.button("🔍 이 Unit 재검사", use_container_width=True, key="requalify_btn"):
-            st.session_state["quality_report"] = analyze_unit_quality(current_draft)
+            _qr = analyze_unit_quality(current_draft)
+            _cross = analyze_cross_unit_repetition(int(selected_unit), current_draft)
+            if _cross:
+                _qr["issues"] = list(_qr.get("issues", [])) + _cross
+            st.session_state["quality_report"] = _qr
             set_status(f"UNIT {selected_unit} 재검사 완료.", "success")
 
     with tool_c2:

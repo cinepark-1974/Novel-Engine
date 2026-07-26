@@ -7,6 +7,8 @@
 #   M17 Continuity Ledger         — 착의·소지품·위치·시각·날씨 상태 원장 (v3.15)
 #   M18 Narrative Distance        — 과잉 노출 / 부당한 은폐 양방향 규율 (v3.15)
 #   M19 Blueprint Adherence       — 해당 Unit 설계안 발췌 후 HARD 주입 (v3.15)
+#       v3.15.1 — extract_blueprint_chapter_title() 추가.
+#       모델이 [CHAPTER n] 헤더를 빼먹을 때 설계안 제목을 폴백으로 쓴다.
 #
 # v3.0 신규 모듈 (M1~M10):
 #   M1  BJND Scene Enforcer        — HARD CONSTRAINT 최상단 + 자동 재생성 연동
@@ -794,6 +796,29 @@ def extract_unit_blueprint(all_blueprints_text: str, unit_no) -> str:
     if not body:
         return ""
     return f"[UNIT {n:02d} 설계]\n{body}"
+
+
+def extract_blueprint_chapter_title(all_blueprints_text: str, unit_no) -> str:
+    """설계안에서 해당 Unit의 '제목' 필드를 뽑는다. (v3.15.1 M19)
+
+    배경 — 모델이 원고 첫 줄의 '[CHAPTER n] — 서브타이틀' 헤더를 빼먹는
+    사례가 있다. 실제 사고: UNIT 02 원고가 헤더 없이 대사로 시작해서
+    DOCX 빌더가 첫 대사를 작품 제목 자리에 렌더했다.
+    설계안에는 이미 작가가 확정한 제목이 있으므로 그것을 폴백으로 쓴다.
+
+    설계안 표기 형태를 모두 허용한다.
+      '**제목**: 완벽한 동선' / '- **제목**: 서명' / '  **제목** : ...'
+    """
+    bp = extract_unit_blueprint(all_blueprints_text, unit_no)
+    if not bp:
+        return ""
+    m = re.search(r"^[\s\-\*·]*\*{0,2}제목\*{0,2}\s*[:：]\s*(.+)$", bp, re.M)
+    if not m:
+        return ""
+    title = m.group(1).strip().strip("*").strip()
+    # 설계안이 따옴표로 감싼 경우 벗긴다
+    title = title.strip("\u201c\u201d\"'《》")
+    return title.strip()
 
 
 def build_blueprint_adherence_block(all_blueprints_text: str, unit_no) -> str:
@@ -3685,9 +3710,32 @@ Punch 규칙: {r['punch_rule']}
 #              (전체 설계 25,654자)로 UNIT 01~10 발췌 성공, 제목 전부 일치.
 #              설계 미작성 구간인 UNIT 11·12는 빈 문자열 반환 확인.
 #            · prompt.py에 import 문이 하나도 없어 `import re` 신규 추가.
-NOVEL_ENGINE_VERSION = "v3.15.0"
+# - v3.15.1: 챕터 제목 폴백 + 교차 Unit 반복 진단 + 통합본 정리
+#            [배경] v3.15.0 검증 중 세 가지가 더 확인됐다.
+#            ① 모델이 원고 첫 줄의 '[CHAPTER n] — 서브타이틀' 헤더를 빼먹으면
+#              chapter_titles가 빈 값으로 남고, DOCX 빌더가 첫 문장을 작품 제목
+#              자리에 렌더한다. v3.15.0에서 빌더 쪽은 막았지만 제목 자체가
+#              비어 있는 문제는 남아 있었다.
+#              → extract_blueprint_chapter_title() 신설. 설계안의 '제목' 필드를
+#                폴백으로 쓴다. 표기 4종('**제목**:' / '- **제목**:' 등) 허용.
+#                실측: 실제 설계 파일에서 UNIT 01~10 제목 10개 전부 추출 성공,
+#                설계 미작성 구간 UNIT 11·12는 빈 문자열 반환.
+#            ② analyze_unit_quality()는 한 Unit 내부 반복만 본다. 실제 사고는
+#              Unit을 건너뛰며 났다 — "심장이 늑골을 두드렸다"(UNIT 01) ↔
+#              "심장이 갈비뼈를 쳤다"(UNIT 02). 늑골과 갈비뼈는 같은 말이고,
+#              독자는 Unit 경계를 의식하지 않으므로 이어 읽으면 바로 걸린다.
+#              → main.py analyze_cross_unit_repetition() 신설.
+#                동의어군 6종(갈비뼈/늑골, 목덜미/뒷목, 손끝, 등골, 심장, 명치)
+#                + 특징 어구(6~14자) 재사용을 직전 3개 Unit과 대조.
+#                실측: UNIT 02 검사에서 손끝(7→3회)·심장(2→2회)·겹치는 어구
+#                6건을 정확히 검출. 눈으로 지적했던 항목과 일치.
+#            ③ STEP 7 통합본에 옛 Unit 본문의 중간 '끝.'이 그대로 실려 나갔다.
+#              → final_manuscript_text()에 sanitize_manuscript() 적용
+#                (is_final_unit=True — 맨 마지막 '끝.'은 보존).
+#            · 세 항목 모두 진단·도구 제공에 그치고 본문 문장은 수정하지 않는다.
+NOVEL_ENGINE_VERSION = "v3.15.1"
 NOVEL_ENGINE_BUILD_DATE = "2026-07-26"
-NOVEL_ENGINE_VERSION_TAG = "v3.15.0 / 2026-07-26 / M17 Continuity Ledger · M18 Narrative Distance · M19 Blueprint Adherence"
+NOVEL_ENGINE_VERSION_TAG = "v3.15.1 / 2026-07-26 / M17 Continuity Ledger · M18 Narrative Distance · M19 Blueprint Adherence"
 
 def get_novel_engine_version_info() -> str:
     """Novel Engine v3.0 메타 정보."""

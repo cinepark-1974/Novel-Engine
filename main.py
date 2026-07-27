@@ -52,6 +52,37 @@ from typing import Optional, List
 #      중간 '끝.'이 STEP 7 통합본에 그대로 실려 나가던 문제. 마지막 '끝.'은 보존.
 #   ★ 세 항목 모두 진단·도구 제공에 그치고 본문 문장은 수정하지 않는다. ★
 #
+# v3.15.2 (2026-07-26) — UI 동선 정리 (엔진 룰 변경 없음)
+#   1. STEP 6(가제 검토) ↔ STEP 7(저장) 순서 교체 + 접힘 전환.
+#      작품 전체 제목은 완고 후 1회짜리 작업인데, Unit을 한 편 생성할 때마다
+#      저장하러 내려가는 길목에 STEP 6으로 끼어 있었다.
+#   2. 전 STEP 버튼에 실행 순번 부여.
+#      생성 순서 = 숫자(5-1~5-4), 사후 점검 도구 = 문자(점검 A·B·C).
+#      '해야 하는 순서'와 '필요할 때 쓰는 도구'를 시각적으로 갈랐다.
+#   3. Chapter 1 4단계 진행 표시(✅/⬜) 추가.
+#   4. STEP 2·3·4·5·6 헤더에 실행 순서 한 줄 안내 추가.
+#
+# v3.16.0 (2026-07-27) — 회차 제목 단일화 (설계안 = 정본)
+#   [배경] 제목이 STEP 4 설계와 STEP 5 집필 두 군데서 따로 만들어졌다.
+#   둘이 연결돼 있지 않아 어긋났고, 모델이 집필 단계 지시를 무시해서
+#   UNIT 01·02 원고에는 [CHAPTER n] 줄이 아예 없었다. 그 빈 제목이
+#   v3.15에서 고친 DOCX 제목 오인 사고의 근본 원인이었다.
+#
+#   1. resolve_chapter_title() 신설 — 설계안 제목이 정본.
+#      구버전 원고가 다른 서브타이틀을 갖고 있으면 설계안이 이기되 알린다.
+#      Chapter 1 병합 / Unit 02~12 / 에필로그 3개 경로 모두 적용.
+#   2. gather_chapter_titles_text() 신설 — 현재 목차 수집.
+#   3. STEP 7을 탭 2개로 재구성 — [작품 제목] [회차 제목 검수].
+#      7-2는 새로 짓지 않고 본문 이탈·목차 스포일러·이미지 중복만 검수.
+#      제목 교체는 '회차 제목 직접 수정' 폼에서 작가가 직접 한다(규칙 7).
+#   4. session_state 키 'chapter_title_review' 신규.
+#
+# v3.16.1 (2026-07-27) — M20 회차 제목 유형 체계 (prompt.py 주도)
+#   설계안 제목 10개가 전부 '수식어 + 추상 명사'라 목차가 한 덩어리였다.
+#   제목 유형을 비트 기능에 종속시켜(인물 소개 회차 = 인물 이름,
+#   전환점 회차 = 사건 이름) 목차에서 회차가 구별되게 했다.
+#   main.py 변경은 없다. 기존 저장 설계안과의 호환은 회귀 테스트로 확인.
+#
 # © 2026 BLUE JEANS PICTURES. All rights reserved.
 # ─────────────────────────────────────────────────────────────
 
@@ -75,6 +106,7 @@ from prompt import (
     build_unit_draft_prompt,
     build_unit_rewrite_prompt,
     build_title_review_prompt,
+    build_chapter_title_review_prompt,
     build_epilogue_prompt,
     build_expand_incomplete_unit_prompt,
     build_ch1_stage_a_prompt,
@@ -537,6 +569,8 @@ DEFAULT_STATE = {
     "status_shown": False,   # v3.15 — 상태 메시지 1회 표시 후 소거용
     # v3.15 M17 Continuity Ledger — Unit별 물리 상태 원장 (문자열 키)
     "continuity_ledger": {},
+    # v3.16 회차 제목 재검토 결과
+    "chapter_title_review": "",
     # v3.1 시나리오 → 소설화 모드 상태
     "scenario_text": "",           # 업로드된 시나리오 원문
     "scenario_stats": {},          # 통계
@@ -1432,6 +1466,57 @@ def gather_continuity_ledger(before_unit: int) -> str:
     return "\n\n".join(f"[UNIT {n:02d} 종료 시점 원장]\n{t}" for n, t in picked)
 
 
+def resolve_chapter_title(unit_no: int, model_title: str, blueprints_text: str) -> tuple:
+    """회차 제목을 확정한다. 설계안 제목이 정본이다. (v3.16)
+
+    배경 — v3.15까지 제목이 두 군데서 만들어졌다.
+      · STEP 4 설계의 '- 제목:' 필드 → "다정함의 온도"
+      · STEP 5 집필의 '[CHAPTER n] — 서브타이틀' 지시 → 별개의 제목
+    둘이 연결돼 있지 않아 어긋났고, 실제로는 모델이 집필 단계 지시를
+    무시해서 UNIT 01·02 원고에 [CHAPTER n] 줄이 아예 없었다.
+
+    v3.16부터 집필 프롬프트는 번호만 출력하고, 제목은 여기서 붙인다.
+    설계안 제목은 2 Unit씩 전체 맥락에서 뽑혀 배열까지 돼 있으므로
+    (04 "정확히 그 자리" → 05 "너무 정확한 밤") 그대로 정본으로 쓴다.
+
+    Args:
+        unit_no: Unit 번호
+        model_title: 모델이 출력한 첫 줄 (없으면 "")
+        blueprints_text: 전체 설계 텍스트
+
+    Returns:
+        (확정 제목, 안내 메시지) — 안내가 필요 없으면 메시지는 ""
+    """
+    n = int(unit_no)
+    bp_title = extract_blueprint_chapter_title(blueprints_text, n)
+
+    # 모델이 붙인 서브타이틀이 있으면 떼어낸다 (v3.16 이전 원고 호환)
+    model_sub = ""
+    if model_title:
+        m = re.match(r"^\[CHAPTER[^\]]*\]\s*[—\-–]\s*(.+)$", model_title.strip())
+        if m:
+            model_sub = m.group(1).strip()
+
+    if bp_title:
+        title = f"[CHAPTER {n}] — {bp_title}"
+        note = ""
+        # 모델이 다른 제목을 지어냈다면 작가에게 알린다. 설계안이 이긴다.
+        if model_sub and model_sub != bp_title:
+            note = (
+                f"집필 단계에서 '{model_sub}'라는 제목이 나왔지만, "
+                f"설계안 제목을 정본으로 적용했습니다 — '{bp_title}'."
+            )
+        return title, note
+
+    # 설계안에 제목이 없는 경우 — 모델 제목을 살리고, 그것도 없으면 번호만
+    if model_sub:
+        return f"[CHAPTER {n}] — {model_sub}", ""
+    return f"[CHAPTER {n}]", (
+        f"UNIT {n:02d} 설계안에 제목이 없어 번호만 넣었습니다. "
+        "STEP 7에서 회차 제목을 채울 수 있습니다."
+    )
+
+
 def generate_unit_summary(unit_no: int, text: str) -> str:
     """완성된 Unit의 1줄 요약을 생성한다."""
     client = get_client()
@@ -1693,6 +1778,23 @@ def gather_all_drafts_text() -> str:
             else:
                 merged.append(txt)
     return merge_nonempty(merged)
+
+
+def gather_chapter_titles_text() -> str:
+    """현재 확정된 회차 제목을 목차 형태로 모은다. (v3.16)
+
+    작가가 목차로 늘어놓았을 때의 인상을 그대로 검수 프롬프트에 넘긴다.
+    """
+    titles = st.session_state.get("chapter_titles", {}) or {}
+    drafts = st.session_state.get("unit_drafts", {}) or {}
+    lines = []
+    for i in range(1, 14):
+        key = f"{i:02d}" if i < 13 else "13"
+        if not (drafts.get(key) or "").strip():
+            continue
+        t = (titles.get(key) or "").strip() or f"[CHAPTER {i}] (제목 없음)"
+        lines.append(f"UNIT {i:02d}  {t}")
+    return "\n".join(lines)
 
 
 def gather_recent_drafts(current_unit: int, window: int = 2) -> str:
@@ -2880,11 +2982,15 @@ if period_mode == "자동 감지 (LOCKED에서)" and locked_text.strip() and _PE
 # STEP 2
 # ─────────────────────────────────────
 st.markdown('<div class="section-header">🔬 STEP 2 · 문체 / 분석</div>', unsafe_allow_html=True)
+st.markdown(
+    '<div class="small-meta">2-1은 문체 샘플이 있을 때만. 2-2 → 2-3 순서로 실행합니다.</div>',
+    unsafe_allow_html=True,
+)
 
 c1, c2, c3 = st.columns(3)
 
 with c1:
-    if st.button("문체 샘플 분석", type="primary", use_container_width=True):
+    if st.button("2-1 · 문체 샘플 분석", type="primary", use_container_width=True):
         def _job():
             prompt = STYLE_DNA_ANALYSIS_PROMPT.format(style_sample=style_sample or "샘플 없음")
             return llm_call(prompt, max_tokens=MAX_TOKENS_ANALYSIS)
@@ -2893,7 +2999,7 @@ with c1:
             st.session_state["style_dna"] = result
 
 with c2:
-    if st.button("기획서 통합 분석", use_container_width=True):
+    if st.button("2-2 · 기획서 통합 분석", use_container_width=True):
         def _job():
             prompt = build_merge_analysis_prompt(
                 working_title=working_title,
@@ -2915,7 +3021,7 @@ with c2:
             st.session_state["merged_analysis"] = result
 
 with c3:
-    if st.button("부족한 점 진단", use_container_width=True):
+    if st.button("2-3 · 부족한 점 진단", use_container_width=True):
         def _job():
             prompt = build_gap_diagnosis_prompt(
                 working_title=working_title,
@@ -2948,6 +3054,11 @@ if st.session_state["gap_diagnosis"]:
 # STEP 3
 # ─────────────────────────────────────
 st.markdown('<div class="section-header">📖 STEP 3 · 전체 줄거리 보강 (기승전결 분할)</div>', unsafe_allow_html=True)
+st.markdown(
+    '<div class="small-meta">3-1 기 → 3-2 승 → 3-3 전 → 3-4 결 순서로 실행합니다. '
+    '앞 단계 결과를 뒤 단계가 받아 씁니다.</div>',
+    unsafe_allow_html=True,
+)
 
 sr_col1, sr_col2, sr_col3, sr_col4 = st.columns(4)
 
@@ -2978,16 +3089,16 @@ def reinforce_segment(segment_name: str):
         get_story_reinforcement_text()
 
 with sr_col1:
-    if st.button("기 보강", use_container_width=True):
+    if st.button("3-1 · 기 보강", use_container_width=True):
         reinforce_segment("기")
 with sr_col2:
-    if st.button("승 보강", use_container_width=True):
+    if st.button("3-2 · 승 보강", use_container_width=True):
         reinforce_segment("승")
 with sr_col3:
-    if st.button("전 보강", use_container_width=True):
+    if st.button("3-3 · 전 보강", use_container_width=True):
         reinforce_segment("전")
 with sr_col4:
-    if st.button("결 보강", use_container_width=True):
+    if st.button("3-4 · 결 보강", use_container_width=True):
         reinforce_segment("결")
 
 story_merged_text = get_story_reinforcement_text()
@@ -3002,6 +3113,11 @@ for seg in ["기", "승", "전", "결"]:
 # STEP 4
 # ─────────────────────────────────────
 st.markdown('<div class="section-header">🏗️ STEP 4 · 12 Unit 설계 (2 Unit씩 6개 버튼)</div>', unsafe_allow_html=True)
+st.markdown(
+    '<div class="small-meta">4-1부터 순서대로 실행하세요. '
+    '앞 그룹 설계가 뒤 그룹의 전제가 되므로 건너뛰면 연결이 어긋납니다.</div>',
+    unsafe_allow_html=True,
+)
 
 bp_cols_top = st.columns(3)
 bp_cols_bottom = st.columns(3)
@@ -3040,12 +3156,12 @@ def build_blueprint(group_key: str):
         st.session_state["unit_blueprints"][group_key] = result
 
 buttons = [
-    ("UNIT 01~02 설계", "01-02"),
-    ("UNIT 03~04 설계", "03-04"),
-    ("UNIT 05~06 설계", "05-06"),
-    ("UNIT 07~08 설계", "07-08"),
-    ("UNIT 09~10 설계", "09-10"),
-    ("UNIT 11~12 설계", "11-12"),
+    ("4-1 · UNIT 01~02 설계", "01-02"),
+    ("4-2 · UNIT 03~04 설계", "03-04"),
+    ("4-3 · UNIT 05~06 설계", "05-06"),
+    ("4-4 · UNIT 07~08 설계", "07-08"),
+    ("4-5 · UNIT 09~10 설계", "09-10"),
+    ("4-6 · UNIT 11~12 설계", "11-12"),
 ]
 
 for idx, (label, group_key) in enumerate(buttons):
@@ -3065,6 +3181,13 @@ all_blueprints_text = gather_blueprints_text()
 # STEP 5
 # ─────────────────────────────────────
 st.markdown('<div class="section-header">✍️ STEP 5 · Unit 원고 생성 / 다시 쓰기</div>', unsafe_allow_html=True)
+st.markdown(
+    '<div class="small-meta">'
+    '버튼 번호가 실행 순서입니다. <b>5-0</b> 자료 스캔(선택) → '
+    '<b>5-1~5-4</b> 본문 생성 → <b>점검 A·B·C</b> 는 생성 후 필요할 때만 씁니다.'
+    '</div>',
+    unsafe_allow_html=True,
+)
 
 # ─────────────────────────────────────
 # v3.13 M15-B: 계량 수치 점검 (집필 직전 · Unit 설계 재실행 불필요)
@@ -3094,7 +3217,7 @@ with st.expander(_mw_label, expanded=False):
         key="metric_watchlist_on",
     )
 
-    if st.button("자료 스캔", use_container_width=True, key="metric_scan_btn"):
+    if st.button("5-0 · 자료 스캔 (집필 전 점검)", use_container_width=True, key="metric_scan_btn"):
         st.session_state["metric_scan_result"] = scan_metric_expressions()
         st.rerun()
 
@@ -3199,13 +3322,27 @@ if selected_unit == "01":
         else:
             st.caption("시그니처 해제 — 오프닝 소재를 엔진이 자유롭게 선택합니다.")
 
+    # v3.15.2 — 진행 표시. 버튼이 4개라 어디까지 했는지 한눈에 안 보였다.
+    _done_a = bool(st.session_state.get("ch1_stage_a", "").strip())
+    _done_b = bool(st.session_state.get("ch1_stage_b", "").strip())
+    _done_c = bool(st.session_state.get("ch1_stage_c", "").strip())
+    _done_m = bool(st.session_state["unit_drafts"].get("01", "").strip())
+    _steps = [("5-1 Stage A", _done_a), ("5-2 Stage B", _done_b),
+              ("5-3 Stage C", _done_c), ("5-4 확정", _done_m)]
+    st.markdown(
+        '<div class="small-meta">진행 — '
+        + "  →  ".join(f"{'✅' if d else '⬜'} {lbl}" for lbl, d in _steps)
+        + "</div>",
+        unsafe_allow_html=True,
+    )
+
     ch1_a, ch1_b, ch1_c = st.columns(3)
 
     with ch1_a:
         st.markdown("**Stage A · PEAK**")
         _sigtag = "음식 시그니처" if st.session_state.get("signature_food_opening", True) else "소재 자유"
         st.markdown(f'<div class="small-meta">오프닝 장면 · {_sigtag} · 인물 정의 · ~2000자</div>', unsafe_allow_html=True)
-        if st.button("Stage A 생성", type="primary", use_container_width=True, key="ch1_a_btn"):
+        if st.button("5-1 · Stage A 생성", type="primary", use_container_width=True, key="ch1_a_btn"):
             def _job():
                 prompt = build_ch1_stage_a_prompt(
                     working_title=working_title, genre=genre, format_mode=format_mode,
@@ -3236,7 +3373,7 @@ if selected_unit == "01":
         st.markdown("**Stage B · WORLD**")
         st.markdown('<div class="small-meta">세계관 · 관계 · 권력 구조를 장면 안에 · ~2500자</div>', unsafe_allow_html=True)
         has_a = bool(st.session_state["ch1_stage_a"].strip())
-        if st.button("Stage B 생성", use_container_width=True, disabled=not has_a, key="ch1_b_btn"):
+        if st.button("5-2 · Stage B 생성", use_container_width=True, disabled=not has_a, key="ch1_b_btn"):
             def _job():
                 prompt = build_ch1_stage_b_prompt(
                     working_title=working_title, genre=genre, format_mode=format_mode,
@@ -3266,7 +3403,7 @@ if selected_unit == "01":
         st.markdown("**Stage C · LOSS**")
         st.markdown('<div class="small-meta">균열 · 상실의 신호 · 클리프행어 · ~1500자</div>', unsafe_allow_html=True)
         has_b = bool(st.session_state["ch1_stage_b"].strip())
-        if st.button("Stage C 생성", use_container_width=True, disabled=not has_b, key="ch1_c_btn"):
+        if st.button("5-3 · Stage C 생성", use_container_width=True, disabled=not has_b, key="ch1_c_btn"):
             def _job():
                 prompt = build_ch1_stage_c_prompt(
                     working_title=working_title, genre=genre, format_mode=format_mode,
@@ -3303,7 +3440,7 @@ if selected_unit == "01":
     all_stages_done = all(st.session_state.get(k, "").strip() for k in ["ch1_stage_a", "ch1_stage_b", "ch1_stage_c"])
     if all_stages_done:
         st.markdown("---")
-        if st.button("✅ Chapter 1 확정 — 3단계를 합쳐서 UNIT 01로 저장", type="primary", use_container_width=True, key="ch1_merge_btn"):
+        if st.button("5-4 · Chapter 1 확정 — 3단계를 합쳐서 UNIT 01로 저장", type="primary", use_container_width=True, key="ch1_merge_btn"):
             merged = (
                 st.session_state["ch1_stage_a"].strip()
                 + "\n\n"
@@ -3318,18 +3455,14 @@ if selected_unit == "01":
             if merge_log:
                 st.info("병합 시 정리한 항목 — " + " / ".join(merge_log))
 
-            # 챕터 제목 파싱
+            # 챕터 제목 파싱 — v3.16: 설계안 제목이 정본
             ch_title, ch_body = parse_chapter_title(merged)
-            if ch_title:
-                st.session_state["unit_drafts"]["01"] = ch_body
-                st.session_state["chapter_titles"]["01"] = ch_title
-            else:
-                st.session_state["unit_drafts"]["01"] = merged
-                # v3.15.1 — 설계안 제목으로 폴백
-                _bp_title = extract_blueprint_chapter_title(all_blueprints_text, 1)
-                if _bp_title:
-                    st.session_state["chapter_titles"]["01"] = f"[CHAPTER 1] — {_bp_title}"
-                    st.caption(f"챕터 제목을 설계안에서 가져왔습니다 — {_bp_title}")
+            st.session_state["unit_drafts"]["01"] = ch_body if ch_title else merged
+            _final_title, _title_note = resolve_chapter_title(1, ch_title, all_blueprints_text)
+            st.session_state["chapter_titles"]["01"] = _final_title
+            st.caption(f"회차 제목 — {_final_title}")
+            if _title_note:
+                st.info(_title_note)
             set_status("Chapter 1이 확정되었습니다. UNIT 01로 저장 완료.", "success")
             # 품질 자동 체크
             final_text = ch_body if ch_title else merged
@@ -3370,7 +3503,7 @@ else:
     draft_col1, draft_col2, draft_col3 = st.columns([1, 1, 1])
 
     with draft_col1:
-        if st.button("Unit 원고 생성", type="primary", use_container_width=True):
+        if st.button("5-1 · Unit 원고 생성", type="primary", use_container_width=True):
             unit_no = int(selected_unit)
 
             if unit_no == 13:
@@ -3401,8 +3534,10 @@ else:
                         st.caption("본문 정리: " + " / ".join(_slog))
                     ch_title, ch_body = parse_chapter_title(result)
                     st.session_state["unit_drafts"][selected_unit] = ch_body if ch_title else result
-                    if ch_title:
-                        st.session_state["chapter_titles"][selected_unit] = ch_title
+                    # v3.16 — 에필로그는 설계 그룹이 없으므로 고정 라벨
+                    st.session_state["chapter_titles"][selected_unit] = (
+                        ch_title if (ch_title and "—" in ch_title) else "[CHAPTER 13] — 에필로그"
+                    )
             else:
                 def _job():
                     # v3.0 M1: 자동 재생성 로직
@@ -3510,22 +3645,16 @@ else:
                     result, _slog = sanitize_manuscript(result, is_final_unit=(unit_no in (12, 13)))
                     if _slog:
                         st.caption("본문 정리: " + " / ".join(_slog))
+                    # v3.16 — 제목은 설계안이 정본. 집필 단계 서브타이틀은 폐지.
                     ch_title, ch_body = parse_chapter_title(result)
                     st.session_state["unit_drafts"][selected_unit] = ch_body if ch_title else result
-                    if ch_title:
-                        st.session_state["chapter_titles"][selected_unit] = ch_title
-                    else:
-                        # v3.15.1 — 모델이 [CHAPTER n] 헤더를 빼먹었을 때
-                        # 설계안에 확정된 제목으로 채운다. 비어 있으면 DOCX
-                        # 빌더가 첫 문장을 제목으로 오인할 수 있다.
-                        _bp_title = extract_blueprint_chapter_title(all_blueprints_text, unit_no)
-                        if _bp_title:
-                            st.session_state["chapter_titles"][selected_unit] = (
-                                f"[CHAPTER {unit_no}] — {_bp_title}"
-                            )
-                            st.caption(
-                                f"챕터 제목이 누락되어 설계안 제목으로 채웠습니다 — {_bp_title}"
-                            )
+                    _final_title, _title_note = resolve_chapter_title(
+                        unit_no, ch_title, all_blueprints_text
+                    )
+                    st.session_state["chapter_titles"][selected_unit] = _final_title
+                    st.caption(f"회차 제목 — {_final_title}")
+                    if _title_note:
+                        st.info(_title_note)
                     check_text = ch_body if ch_title else result
                     if is_incomplete_text(check_text, unit_no):
                         set_status(
@@ -3556,7 +3685,7 @@ else:
             ["더 상업적으로", "더 빠르게", "더 감정적으로", "더 차갑게", "더 영상적으로", "더 문학적으로"],
             index=0,
         )
-        if st.button("Unit 다시 쓰기", use_container_width=True):
+        if st.button("5-2 · Unit 다시 쓰기 (선택)", use_container_width=True):
             source_text = st.session_state["unit_drafts"].get(selected_unit, "")
             if source_text.strip():
                 def _job():
@@ -3604,7 +3733,7 @@ if current_draft:
     tool_c1, tool_c2, tool_c3 = st.columns(3)
 
     with tool_c1:
-        if st.button("🔍 이 Unit 재검사", use_container_width=True, key="requalify_btn"):
+        if st.button("점검 A · 이 Unit 재검사", use_container_width=True, key="requalify_btn"):
             _qr = analyze_unit_quality(current_draft)
             _cross = analyze_cross_unit_repetition(int(selected_unit), current_draft)
             if _cross:
@@ -3618,7 +3747,7 @@ if current_draft:
             current_draft, is_final_unit=(selected_unit in ("12", "13"))
         )
         if st.button(
-            "🧹 본문 정리",
+            "점검 B · 본문 정리",
             use_container_width=True,
             disabled=not _plog,
             key="sanitize_btn",
@@ -3635,7 +3764,7 @@ if current_draft:
 
     with tool_c3:
         if st.button(
-            "📋 상태 원장 생성",
+            "점검 C · 상태 원장 생성",
             use_container_width=True,
             key="ledger_btn",
             help="다음 Unit 집필 시 착의·소지품·시각·날씨가 어긋나지 않도록 원장을 만듭니다. (M17)",
@@ -3717,46 +3846,12 @@ if char_report.get("first_appearance"):
 # ─────────────────────────────────────
 # STEP 6
 # ─────────────────────────────────────
-st.markdown('<div class="section-header">🏷️ STEP 6 · 가제 검토 / 제목 제안</div>', unsafe_allow_html=True)
-
-title_col1, title_col2 = st.columns([1, 1])
-
-with title_col1:
-    if st.button("원고 기반 제목 검토", use_container_width=True):
-        def _job():
-            prompt = build_title_review_prompt(
-                current_title=working_title,
-                overview=overview,
-                synopsis=synopsis,
-                story_reinforcement_merged=story_merged_text,
-                all_blueprints_text=all_blueprints_text,
-                all_drafts_text=gather_all_drafts_text(),
-                style_dna=st.session_state["style_dna"],
-            )
-            return llm_call(prompt, max_tokens=MAX_TOKENS_SHORT)
-
-        result = run_with_status(
-            "원고를 다시 읽고 제목을 검토 중입니다...",
-            "제목 검토 / 대안 제안이 완료되었습니다.",
-            _job,
-        )
-        if result:  # v3.4.1 — 빈 문자열도 저장하지 않는다
-            st.session_state["title_review"] = result
-
-with title_col2:
-    st.markdown(
-        '<div class="small-meta">가제를 버리는 단계가 아니라, 원고를 읽고 현재 가제가 맞는지 검토하고 대안을 비교하는 단계입니다.</div>',
-        unsafe_allow_html=True,
-    )
-
-if st.session_state["title_review"]:
-    with st.expander("제목 검토 / 대안 보기", expanded=True):
-        st.markdown(st.session_state["title_review"])
-
-# ─────────────────────────────────────
-# STEP 7
-# ─────────────────────────────────────
-st.markdown('<div class="section-header">💾 STEP 7 · 저장 / 내보내기</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-header">💾 STEP 6 · 저장 / 내보내기</div>', unsafe_allow_html=True)
+st.markdown(
+    '<div class="small-meta">현재 Unit만 저장하거나, 전체 통합본을 저장합니다. '
+    '작업을 이어서 하려면 상단의 프로젝트 저장(JSON)을 함께 쓰세요.</div>',
+    unsafe_allow_html=True,
+)
 
 safe_title = safe_filename(working_title)
 manuscript = final_manuscript_text(working_title)
@@ -3831,3 +3926,151 @@ with exp2:
 
 with st.expander("최종 원고 미리보기", expanded=False):
     st.text_area("최종 원고", value=manuscript, height=420, label_visibility="collapsed")
+
+
+# ─────────────────────────────────────
+# STEP 7
+# v3.15.2 — 기존에는 이 블록이 STEP 5(원고 생성)와 STEP 7(저장) 사이에
+# STEP 6으로 끼어 있었다. 작품 전체 제목은 완고 후 한 번만 정하는 일인데,
+# Unit을 한 편 생성할 때마다 저장하러 내려가는 길목에 놓여 있었다.
+# 저장 뒤로 옮기고, 기본 접힘 상태로 둔다.
+# ─────────────────────────────────────
+_title_done = bool(
+    st.session_state.get("title_review", "").strip()
+    or st.session_state.get("chapter_title_review", "").strip()
+)
+_units_written = count_written_units()
+
+with st.expander(
+    "🏷️ STEP 7 · 제목 검수 (작품 제목 · 회차 제목)"
+    + ("  —  검토 완료" if _title_done else "  —  완고 후 1회"),
+    expanded=False,
+):
+    st.caption(
+        "완고 후 한 번만 하는 단계입니다. 회차마다 내려올 필요가 없습니다."
+        + (f"  현재 Unit {_units_written}개 작성됨." if _units_written else "")
+    )
+
+    _t_tab1, _t_tab2 = st.tabs(["작품 제목", "회차 제목 검수"])
+
+    # ── 7-1 작품 전체 제목 ──
+    with _t_tab1:
+        title_col1, title_col2 = st.columns([1, 1])
+        with title_col1:
+            if st.button("7-1 · 원고 기반 작품 제목 검토", use_container_width=True):
+                def _job():
+                    prompt = build_title_review_prompt(
+                        current_title=working_title,
+                        overview=overview,
+                        synopsis=synopsis,
+                        story_reinforcement_merged=story_merged_text,
+                        all_blueprints_text=all_blueprints_text,
+                        all_drafts_text=gather_all_drafts_text(),
+                        style_dna=st.session_state["style_dna"],
+                    )
+                    return llm_call(prompt, max_tokens=MAX_TOKENS_SHORT)
+
+                result = run_with_status(
+                    "원고를 다시 읽고 작품 제목을 검토 중입니다...",
+                    "작품 제목 검토가 완료되었습니다.",
+                    _job,
+                )
+                if result:  # v3.4.1 — 빈 문자열도 저장하지 않는다
+                    st.session_state["title_review"] = result
+
+        with title_col2:
+            st.markdown(
+                '<div class="small-meta">가제를 버리는 단계가 아니라, 원고를 읽고 현재 가제가 '
+                '맞는지 검토하고 대안을 비교하는 단계입니다.</div>',
+                unsafe_allow_html=True,
+            )
+
+        if st.session_state["title_review"]:
+            st.markdown("---")
+            st.markdown(st.session_state["title_review"])
+
+    # ── 7-2 회차 제목 검수 (v3.16 신규) ──
+    with _t_tab2:
+        _cur_titles = gather_chapter_titles_text()
+        st.markdown(
+            '<div class="small-meta">'
+            '회차 제목은 STEP 4 설계에서 전체 맥락을 보고 뽑혀 이미 배열이 잡혀 있습니다. '
+            '여기서는 새로 짓지 않고 <b>본문 이탈 · 목차 스포일러 · 이미지 중복</b> '
+            '세 가지만 검수합니다. 멀쩡한 제목은 그대로 둡니다.</div>',
+            unsafe_allow_html=True,
+        )
+
+        if not _cur_titles:
+            st.warning("아직 확정된 회차가 없습니다. 먼저 STEP 5에서 Unit 원고를 생성해 주세요.")
+        else:
+            st.markdown("**현재 목차**")
+            st.code(_cur_titles, language=None)
+
+            _ct_c1, _ct_c2 = st.columns([1, 1])
+            with _ct_c1:
+                if st.button("7-2 · 회차 제목 검수", use_container_width=True, type="primary"):
+                    def _job():
+                        prompt = build_chapter_title_review_prompt(
+                            working_title=working_title,
+                            genre=genre,
+                            current_titles_text=_cur_titles,
+                            all_drafts_text=gather_all_drafts_text(),
+                            all_blueprints_text=all_blueprints_text,
+                        )
+                        return llm_call(prompt, max_tokens=MAX_TOKENS_ANALYSIS)
+
+                    result = run_with_status(
+                        "완성 원고와 회차 제목을 대조하는 중입니다...",
+                        "회차 제목 검수가 완료되었습니다.",
+                        _job,
+                    )
+                    if result:
+                        st.session_state["chapter_title_review"] = result
+
+            with _ct_c2:
+                st.markdown(
+                    '<div class="small-meta">검수 결과는 제안일 뿐입니다. '
+                    '제목 교체는 아래에서 작가가 직접 하세요.</div>',
+                    unsafe_allow_html=True,
+                )
+
+            if st.session_state.get("chapter_title_review", "").strip():
+                st.markdown("---")
+                st.markdown(st.session_state["chapter_title_review"])
+
+            # ── 제목 직접 수정 ──
+            # ★ 자동 반영하지 않는다. 작가가 고른 것만 들어간다 (작업 규칙 7). ★
+            st.markdown("---")
+            with st.expander("✏️ 회차 제목 직접 수정", expanded=False):
+                st.caption(
+                    "검수 제안 중 마음에 드는 것만 골라 직접 넣으세요. "
+                    "엔진은 제목을 자동으로 바꾸지 않습니다."
+                )
+                _edited = {}
+                for _i in range(1, 14):
+                    _k = f"{_i:02d}" if _i < 13 else "13"
+                    if not (st.session_state["unit_drafts"].get(_k) or "").strip():
+                        continue
+                    _cur = st.session_state["chapter_titles"].get(_k, "")
+                    _sub = ""
+                    _m = re.match(r"^\[CHAPTER[^\]]*\]\s*[—\-–]\s*(.+)$", _cur.strip())
+                    if _m:
+                        _sub = _m.group(1).strip()
+                    _edited[_k] = st.text_input(
+                        f"UNIT {_i:02d} 제목",
+                        value=_sub,
+                        key=f"ct_edit_{_k}",
+                        placeholder="비워두면 번호만 표시됩니다",
+                    )
+                if st.button("회차 제목 일괄 저장", use_container_width=True, key="ct_save_all"):
+                    _changed = 0
+                    for _k, _v in _edited.items():
+                        _num = int(_k)
+                        _new = f"[CHAPTER {_num}] — {_v.strip()}" if _v.strip() else f"[CHAPTER {_num}]"
+                        if st.session_state["chapter_titles"].get(_k, "") != _new:
+                            st.session_state["chapter_titles"][_k] = _new
+                            _changed += 1
+                    set_status(f"회차 제목 {_changed}개를 수정했습니다.", "success")
+                    st.rerun()
+
+# ─────────────────────────────────────

@@ -83,6 +83,42 @@ from typing import Optional, List
 #   전환점 회차 = 사건 이름) 목차에서 회차가 구별되게 했다.
 #   main.py 변경은 없다. 기존 저장 설계안과의 호환은 회귀 테스트로 확인.
 #
+# v3.16.2 (2026-07-27) — DOCX 빈 줄 처리 + 집필 메타 발화 검출
+#   1. export_docx(title, content, spacing_mode) — 세 번째 인자 신규.
+#      기존에는 본문의 빈 줄 하나하나를 장면 전환으로 보고 빈 단락을 넣었다.
+#      모델은 모든 문단 사이에 빈 줄을 넣으므로 절반이 빈 단락이 됐다.
+#      실측 — UNIT 01: 219단락 중 108개(49%)가 빈 단락.
+#      standard(기본): 빈 줄 1개는 문단 구분으로만 처리(빈 단락 없음).
+#      relaxed: standard + 문단 뒤 6pt 여백.
+#      web: 구버전 동작 유지.
+#      빈 줄 2개 이상 / 장면 전환 마커(*, ·, — 등)는 모든 모드에서 보존.
+#      실측 결과 — 220단락 → 112단락, 빈 단락 108 → 0, 장면 전환은 유지.
+#   2. STEP 6에 'DOCX 문단 간격' 라디오 추가.
+#   3. sanitize_manuscript에 집필 메타 발화 검출 추가.
+#      "Stage B가 닫혔으니 ~ Stage C를 열겠습니다"가 본문에 섞인 사고.
+#      ★ 본문 문장이므로 자동 삭제하지 않고 경고만 한다(규칙 7). ★
+#
+# v3.16.3 (2026-07-27) — master 서식 통일 + 원장 잘림 수정 + 회차 재생성
+#   1. export_docx 서식을 작가 master 파일 규격으로 통일.
+#      여백 상하좌우 2.0cm / 함초롱바탕 10.5pt / 줄간격 1.15 / 양쪽정렬.
+#      (기존: 상3·하좌우2.54cm, 바탕 10pt, 줄간격 1.6)
+#      작가가 master에 붙여넣을 때 서식이 흔들리지 않게 하는 것이 목적.
+#   2. generate_continuity_ledger max_tokens 1500 → 4000.
+#      실제 사고 — UNIT 01 원장이 [착의] 항목 중간에서 잘려 뒤쪽 6개 항목이
+#      사라졌고, "명함을 택시 안에서 받았다"가 원장에 없어 UNIT 02가
+#      "파티 케이터링 화장실 앞"으로 왜곡해도 걸러지지 않았다.
+#      필수 항목 누락·잘림 검사 추가. 실패 시 조용히 넘어가지 않고 경고.
+#   3. sanitize_manuscript에 기울임 마크다운 제거 추가.
+#      실제 사고 — 문자 메시지가 *오늘도 늦어? 밥은 먹었고.* 로 나갔다.
+#      장면 전환 마커(별표만 있는 줄)와 구분해 내용이 있을 때만 벗긴다.
+#   4. 회차 재생성 UI 신설.
+#      · [♻️ 1화 처음부터 다시 쓰기] — Stage A·B·C + UNIT 01 확정본 +
+#        제목 + 원장 + 요약을 한 번에 비운다. 설계안은 보존.
+#      · [♻️ N화 처음부터 다시 쓰기] — 선택 Unit을 비운다.
+#      둘 다 체크박스 확인을 거쳐야 실행된다.
+#      기존 '다시 쓰기'는 원고를 손보는 것이고, 이것은 새로 뽑는 것이다.
+#      비우지 않으면 옛 원고가 previous_drafts로 섞여 들어간다.
+#
 # © 2026 BLUE JEANS PICTURES. All rights reserved.
 # ─────────────────────────────────────────────────────────────
 
@@ -1194,6 +1230,15 @@ def sanitize_manuscript(text: str, is_final_unit: bool = False) -> tuple:
         out = re.sub(r"\*\*(.+?)\*\*", r"\1", out, flags=re.S)
         log.append(f"굵게 표시 마크다운 {n_bold}개 제거")
 
+    # ── ①-2 기울임 마크다운 제거 (v3.16.3) ──
+    #     실제 사고 — 문자 메시지가 *오늘도 늦어? 밥은 먹었고.* 형태로 나갔다.
+    #     장면 전환 마커(별표만 있는 줄)와 구분하기 위해, 별표 사이에
+    #     내용이 있는 경우만 벗긴다.
+    n_ital = len(re.findall(r"(?<!\*)\*(?!\s)([^*\n]{1,200}?)(?<!\s)\*(?!\*)", out))
+    if n_ital:
+        out = re.sub(r"(?<!\*)\*(?!\s)([^*\n]{1,200}?)(?<!\s)\*(?!\*)", r"\1", out)
+        log.append(f"기울임 마크다운 {n_ital}개 제거")
+
     # ── ② 헤딩·수평선 마커 제거 (줄 전체가 마커인 경우만) ──
     n_hr = len(re.findall(r"^\s*(?:---+|===+|\*\*\*+)\s*$", out, re.M))
     if n_hr:
@@ -1231,7 +1276,26 @@ def sanitize_manuscript(text: str, is_final_unit: bool = False) -> tuple:
             note += " (마지막 줄 '끝.'은 보존)"
         log.append(note)
 
-    # ── ④ 3줄 이상 연속 공백을 2줄로 정리 ──
+    # ── ④ 집필 메타 발화 검출 (v3.16.2) ──
+    #     "Stage B가 닫혔으니 ~ Stage C를 열겠습니다" 같은 문장이 본문에
+    #     섞여 나온 사고가 있었다. 모델이 작가에게 하는 말을 원고에 쓴 것이다.
+    #     ★ 본문 문장이므로 자동 삭제하지 않는다 (작업 규칙 7). 로그로만 알린다. ★
+    meta_hits = re.findall(
+        r"^.*(?:Stage\s*[ABC]|스테이지\s*[ABCabc])(?=.*(?:겠습니다|하겠|보여드|이어서)).*$",
+        out, re.M,
+    )
+    meta_hits += re.findall(
+        r"^.*(?:열겠습니다|그리겠습니다|작성하겠습니다|보여드리겠습니다|이어서 쓰겠습니다).*$",
+        out, re.M,
+    )
+    meta_hits = [h.strip() for h in dict.fromkeys(meta_hits) if h.strip()]
+    if meta_hits:
+        log.append(
+            f"⚠️ 집필 메타 발화로 보이는 문장 {len(meta_hits)}건 발견 "
+            f"(자동 삭제하지 않음) — \"{meta_hits[0][:40]}…\""
+        )
+
+    # ── ⑤ 3줄 이상 연속 공백을 2줄로 정리 ──
     #     위 제거 과정에서 생긴 빈 줄만 정돈한다.
     if re.search(r"\n{4,}", out):
         out = re.sub(r"\n{4,}", "\n\n\n", out)
@@ -1426,18 +1490,44 @@ def generate_continuity_ledger(unit_no: int, text: str) -> str:
     try:
         prev = gather_continuity_ledger(before_unit=unit_no)
         prompt = build_continuity_ledger_prompt(unit_no, text[:12000], prev)
+        # v3.16.3 — max_tokens 1500은 부족했다. 실제 사고: UNIT 01 원장이
+        # [착의] 항목 중간에서 잘려, [소지품]·[인지]·[통신] 등 뒤쪽 6개 항목이
+        # 통째로 사라졌다. 그래서 "명함을 택시 안에서 받았다"는 사실이
+        # 원장에 없었고, UNIT 02가 "파티 케이터링 화장실 앞에서 받았다"로
+        # 왜곡해도 걸러지지 않았다.
         resp = client.messages.create(
-            model=os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5"),
-            max_tokens=1500,
+            model=DEFAULT_MODEL,
+            max_tokens=4000,
             messages=[{"role": "user", "content": prompt}],
         )
         ledger = response_text(resp).strip()
-        if ledger:
-            if "continuity_ledger" not in st.session_state:
-                st.session_state["continuity_ledger"] = {}
-            st.session_state["continuity_ledger"][f"{unit_no:02d}"] = ledger
+        if not ledger:
+            st.warning(
+                f"UNIT {unit_no:02d} 상태 원장 생성이 비어 있습니다. "
+                "다음 Unit에서 연속성 검증이 작동하지 않습니다."
+            )
+            return ""
+
+        # v3.16.3 — 잘림 검사. 원장이 잘리면 뒤쪽 항목이 통째로 사라진다.
+        required = ["[시각·경과]", "[핵심 사실]", "[소지품]", "[인지]", "[미회수]"]
+        missing = [k for k in required if k not in ledger]
+        if missing or looks_truncated(ledger):
+            st.warning(
+                f"UNIT {unit_no:02d} 상태 원장이 불완전합니다 — "
+                + (f"누락 항목 {', '.join(missing)}. " if missing else "문장 중간에서 끊겼습니다. ")
+                + "STEP 5의 [점검 C · 상태 원장 생성]으로 다시 만들거나, "
+                "원장 편집창에서 직접 채워주세요."
+            )
+
+        if "continuity_ledger" not in st.session_state:
+            st.session_state["continuity_ledger"] = {}
+        st.session_state["continuity_ledger"][f"{unit_no:02d}"] = ledger
         return ledger
-    except Exception:
+    except Exception as e:
+        st.warning(
+            f"UNIT {unit_no:02d} 상태 원장 생성에 실패했습니다 ({type(e).__name__}). "
+            "연속성 검증 없이 다음 Unit이 생성됩니다."
+        )
         return ""
 
 
@@ -1918,8 +2008,24 @@ def _looks_like_doc_title(line: str, title: str) -> bool:
     return False
 
 
-def export_docx(title: str, content: str) -> bytes:
-    """한국 소설 원고 표준 DOCX — MS Word 소설 원고 포맷"""
+def export_docx(title: str, content: str, spacing_mode: str = "standard") -> bytes:
+    """한국 소설 원고 표준 DOCX — MS Word 소설 원고 포맷
+
+    v3.16.2 — 빈 줄 처리 방식 개선.
+    기존에는 본문의 빈 줄 하나하나를 '장면 전환'으로 보고 빈 단락을 넣었다.
+    그런데 모델은 문단과 문단 사이에 항상 빈 줄을 넣으므로, 결과적으로
+    전체 단락의 절반이 빈 단락이 됐다. (실측 — UNIT 01: 219단락 중 108개, 49%)
+    줄간격 1.6까지 겹쳐 원고가 실제 분량의 두 배로 늘어났다.
+
+    한국 소설 원고 표준은 문단 구분을 ★첫 줄 들여쓰기★로 한다.
+    빈 줄은 장면 전환에만 쓴다. 그래서 기본값을 standard로 바꾼다.
+
+    spacing_mode:
+      "standard" — 빈 줄 1개는 문단 구분으로만 처리(빈 단락 없음).
+                   빈 줄 2개 이상 또는 장면 전환 마커일 때만 여백을 준다.
+      "relaxed"  — standard와 같되 문단 뒤에 6pt 여백을 준다.
+      "web"      — 빈 줄을 그대로 빈 단락으로 옮긴다 (v3.16.1까지의 동작).
+    """
     from docx.shared import Pt, Cm
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.oxml.ns import qn
@@ -1928,22 +2034,25 @@ def export_docx(title: str, content: str) -> bytes:
 
     doc = Document()
 
-    # ── 페이지: A4, 여백 (상 3cm, 하좌우 2.54cm) ──
+    # ── 페이지: A4, 여백 상하좌우 2.0cm (v3.16.3 — 작가 master 파일 규격) ──
     section = doc.sections[0]
     section.page_width = Cm(21)
     section.page_height = Cm(29.7)
-    section.top_margin = Cm(3)
-    section.bottom_margin = Cm(2.54)
-    section.left_margin = Cm(2.54)
-    section.right_margin = Cm(2.54)
+    section.top_margin = Cm(2.0)
+    section.bottom_margin = Cm(2.0)
+    section.left_margin = Cm(2.0)
+    section.right_margin = Cm(2.0)
 
-    # ── 기본 스타일: 바탕 10pt, 줄간격 160%, 양쪽정렬, 첫 줄 들여쓰기 1글자 ──
+    # ── 기본 스타일: 함초롱바탕 10.5pt, 줄간격 1.15, 양쪽정렬 (v3.16.3) ──
+    # 작가가 master 파일에서 최종 스타일을 적용하므로, 엔진 출력은
+    # master와 같은 규격으로 맞춰 붙여넣을 때 서식이 흔들리지 않게 한다.
     style_normal = doc.styles["Normal"]
-    style_normal.font.name = "Batang"
-    style_normal.font.size = Pt(10)
-    style_normal.paragraph_format.line_spacing = 1.6
+    style_normal.font.name = "HCR Batang"
+    style_normal.font.size = Pt(10.5)
+    style_normal.paragraph_format.line_spacing = 1.15
     style_normal.paragraph_format.space_before = Pt(0)
-    style_normal.paragraph_format.space_after = Pt(0)
+    # v3.16.2 — relaxed 모드는 빈 단락 대신 문단 여백으로 숨통을 준다.
+    style_normal.paragraph_format.space_after = Pt(6) if spacing_mode == "relaxed" else Pt(0)
     style_normal.paragraph_format.first_line_indent = Cm(0.35)
     style_normal.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
 
@@ -1953,7 +2062,10 @@ def export_docx(title: str, content: str) -> bytes:
     if rfonts is None:
         from lxml import etree
         rfonts = etree.SubElement(rpr, qn("w:rFonts"))
-    rfonts.set(qn("w:eastAsia"), "Batang")
+    # 한글 폰트 — 함초롱바탕 (v3.16.3)
+    rfonts.set(qn("w:eastAsia"), "\ud568\ucd08\ub871\ubc14\ud0d5")
+    rfonts.set(qn("w:ascii"), "HCR Batang")
+    rfonts.set(qn("w:hAnsi"), "HCR Batang")
 
     # ── 헬퍼 ──
     def add_normal(text):
@@ -1965,7 +2077,7 @@ def export_docx(title: str, content: str) -> bytes:
         p.paragraph_format.first_line_indent = Cm(0)
         return p
 
-    def add_centered(text, size=10, bold=False, before=0, after=0):
+    def add_centered(text, size=10.5, bold=False, before=0, after=0):
         p = doc.add_paragraph(text)
         p.alignment = WD_ALIGN_PARAGRAPH.CENTER
         p.paragraph_format.first_line_indent = Cm(0)
@@ -2001,12 +2113,26 @@ def export_docx(title: str, content: str) -> bytes:
     while i < len(lines):
         s = lines[i].strip()
 
-        # 빈 줄 = 장면 전환
+        # 빈 줄 처리 (v3.16.2)
+        # 연속된 빈 줄의 개수를 세어, 문단 구분인지 장면 전환인지 가른다.
         if not s:
+            blank_run = 0
+            while i < len(lines) and not lines[i].strip():
+                blank_run += 1
+                i += 1
+            if spacing_mode == "web":
+                # 구버전 동작 — 빈 줄을 그대로 옮긴다
+                add_scene_break()
+            elif blank_run >= 2:
+                # 빈 줄 2개 이상 = 명시적 장면 전환
+                add_scene_break()
+            # 빈 줄 1개 = 문단 구분. 들여쓰기가 이미 구분하므로 아무것도 넣지 않는다.
+            continue
+
+        # 장면 전환 마커 줄 — 빈 단락 하나로 치환 (v3.16.2)
+        if re.fullmatch(r"[*·•\-—–\s]{1,12}", s) and not s.isdigit():
             add_scene_break()
             i += 1
-            while i < len(lines) and not lines[i].strip():
-                i += 1
             continue
 
         # 작품 제목 (첫 줄)
@@ -3322,6 +3448,37 @@ if selected_unit == "01":
         else:
             st.caption("시그니처 해제 — 오프닝 소재를 엔진이 자유롭게 선택합니다.")
 
+    # ── v3.16.3 · 1화 전체 재생성 ──
+    # 1화는 Stage A/B/C 3단계라 처음부터 다시 하려면 버튼을 세 번 눌러야 했고,
+    # 이전 Stage 텍스트가 남아 있으면 새 Stage가 그것을 이어받아 섞였다.
+    # 이 버튼은 1화 관련 상태를 한 번에 비워 깨끗한 재시작을 만든다.
+    with st.expander("♻️ 1화 처음부터 다시 쓰기", expanded=False):
+        st.caption(
+            "Stage A·B·C 원고와 UNIT 01 확정본, 회차 제목, 상태 원장, 요약을 모두 비웁니다. "
+            "설계안(STEP 4)과 STEP 1 자료는 그대로 둡니다."
+        )
+        _r1c1, _r1c2 = st.columns([1, 1])
+        with _r1c1:
+            _reset1_ok = st.checkbox("네, 1화를 비우겠습니다", key="ch1_reset_confirm")
+        with _r1c2:
+            if st.button(
+                "1화 초기화 후 다시 시작",
+                use_container_width=True,
+                disabled=not _reset1_ok,
+                key="ch1_reset_btn",
+            ):
+                for _k in ("ch1_stage_a", "ch1_stage_b", "ch1_stage_c"):
+                    st.session_state[_k] = ""
+                st.session_state["unit_drafts"]["01"] = ""
+                st.session_state["chapter_titles"]["01"] = ""
+                for _d in ("unit_summaries", "continuity_ledger", "character_tracker"):
+                    if isinstance(st.session_state.get(_d), dict):
+                        st.session_state[_d].pop("01", None)
+                st.session_state["quality_report"] = {}
+                st.session_state["ch1_reset_confirm"] = False
+                set_status("1화를 비웠습니다. 5-1 Stage A부터 다시 시작하세요.", "success")
+                st.rerun()
+
     # v3.15.2 — 진행 표시. 버튼이 4개라 어디까지 했는지 한눈에 안 보였다.
     _done_a = bool(st.session_state.get("ch1_stage_a", "").strip())
     _done_b = bool(st.session_state.get("ch1_stage_b", "").strip())
@@ -3680,6 +3837,35 @@ else:
                     track_characters(selected_unit, check_text)
 
     with draft_col2:
+        # ── v3.16.3 · 이 Unit 처음부터 다시 쓰기 ──
+        # '다시 쓰기'는 기존 원고를 손보는 것이고, 이것은 완전히 새로 뽑는 것이다.
+        # 원고를 비워야 previous_drafts에 옛 원고가 섞여 들어가지 않는다.
+        with st.expander(f"♻️ {selected_unit}화 처음부터 다시 쓰기", expanded=False):
+            st.caption(
+                "이 Unit의 원고·제목·상태 원장·요약을 비웁니다. "
+                "비운 뒤 5-1로 새로 생성하세요. 설계안은 그대로 둡니다."
+            )
+            _ru_ok = st.checkbox(
+                f"네, {selected_unit}화를 비우겠습니다", key=f"unit_reset_confirm_{selected_unit}"
+            )
+            if st.button(
+                f"{selected_unit}화 초기화",
+                use_container_width=True,
+                disabled=not _ru_ok,
+                key=f"unit_reset_btn_{selected_unit}",
+            ):
+                st.session_state["unit_drafts"][selected_unit] = ""
+                st.session_state["chapter_titles"][selected_unit] = ""
+                for _d in ("unit_summaries", "continuity_ledger", "character_tracker"):
+                    if isinstance(st.session_state.get(_d), dict):
+                        st.session_state[_d].pop(selected_unit, None)
+                st.session_state["quality_report"] = {}
+                st.session_state[f"unit_reset_confirm_{selected_unit}"] = False
+                set_status(
+                    f"{selected_unit}화를 비웠습니다. 5-1로 새로 생성하세요.", "success"
+                )
+                st.rerun()
+
         rewrite_mode = st.selectbox(
             "다시 쓰기 모드",
             ["더 상업적으로", "더 빠르게", "더 감정적으로", "더 차갑게", "더 영상적으로", "더 문학적으로"],
@@ -3859,12 +4045,37 @@ manuscript = final_manuscript_text(working_title)
 current_unit_text = st.session_state["unit_drafts"].get(selected_unit, "").strip()
 current_unit_label = "UNIT_13_에필로그" if selected_unit == "13" else f"UNIT_{selected_unit}"
 
+# ── DOCX 문단 간격 (v3.16.2) ──
+# 기존에는 본문의 빈 줄을 전부 빈 단락으로 옮겨 원고 분량이 두 배가 됐다.
+# (실측 — UNIT 01: 219단락 중 108개가 빈 단락, 49%)
+_spacing_labels = {
+    "standard": "표준 — 들여쓰기로 문단 구분 (한국 소설 원고 기본)",
+    "relaxed": "여유 — 들여쓰기 + 문단 뒤 6pt 여백",
+    "web": "웹 연재 — 빈 줄을 그대로 유지",
+}
+_spacing_mode = st.radio(
+    "DOCX 문단 간격",
+    options=list(_spacing_labels.keys()),
+    format_func=lambda k: _spacing_labels[k],
+    horizontal=True,
+    index=0,
+    key="docx_spacing_mode",
+    help="빈 줄 2개 이상이나 장면 전환 마커는 어느 모드에서도 여백으로 남습니다.",
+)
+
 txt_bytes = export_txt(manuscript) if manuscript.strip() else b""
-docx_bytes = export_docx(working_title or "Novel Draft", manuscript) if manuscript.strip() else b""
+docx_bytes = (
+    export_docx(working_title or "Novel Draft", manuscript, _spacing_mode)
+    if manuscript.strip() else b""
+)
 
 unit_txt_bytes = export_txt(current_unit_text) if current_unit_text else b""
 unit_docx_bytes = (
-    export_docx(f"{working_title or 'Novel Draft'} {current_unit_label}", current_unit_text)
+    export_docx(
+        f"{working_title or 'Novel Draft'} {current_unit_label}",
+        current_unit_text,
+        _spacing_mode,
+    )
     if current_unit_text
     else b""
 )

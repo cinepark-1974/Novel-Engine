@@ -716,7 +716,17 @@ BLUEPRINT_ADHERENCE_BLOCK_HEAD = """
 4) 클리프행어 유형 — 설계안이 지정한 유형(C1~C6)으로 닫는다.
 5) Opening / Closing Signature — 첫 문장과 마지막 문장을 그 시그니처의
    이미지·리듬·톤으로 쓴다. 문장을 그대로 복제하지는 말고 결을 옮긴다.
-6) Unit 구조 유형([ACT]/[EMO]/[INV]/[CON]/[REV]/[SIL]) — 설계안 지정을 따른다.
+   ★★ Closing Signature는 이 Unit의 ★마지막 문장★이다. (v3.16.5) ★★
+   그 문장을 쓴 뒤에는 단 한 문단도 더 쓰지 마라.
+   ❌ 실제 사고 — Closing Signature를 원고 58% 지점에 쓰고, 그 뒤로
+      다음 Unit이 다룰 내용까지 42%를 더 이어 써서 Unit 경계가 무너졌다.
+      1화가 2화 재료를 먹으면 2화가 설 자리를 잃는다.
+   → Closing Signature에 해당하는 문장을 쓰고 싶어지는 지점이 오면,
+     거기가 이 Unit의 끝이다. 더 쓰지 말고 멈춰라.
+6) 종료 지점 — 설계안의 'Punch(장면 종결)'가 지정한 상태에서 닫는다.
+   그 상태를 지나서 사건을 더 진행시키지 마라. 다음 Unit의 몫이다.
+   ★ 좋은 장면이 더 떠올라도 쓰지 마라. 그것은 다음 Unit의 재료다. ★
+7) Unit 구조 유형([ACT]/[EMO]/[INV]/[CON]/[REV]/[SIL]) — 설계안 지정을 따른다.
 
 [집필이 자유롭게 결정할 항목]
 - 문장, 문단 리듬, 감각 묘사, 대사의 실제 어휘
@@ -727,7 +737,10 @@ BLUEPRINT_ADHERENCE_BLOCK_HEAD = """
 1) 설계안의 '핵심 사건'이 원고 안에서 실제로 벌어졌는가?
 2) 설계안의 Plant 항목이 전부 원고에 등장했는가?
 3) 마지막 문장이 설계안의 클리프행어 유형과 일치하는가?
-셋 중 하나라도 아니면 그 부분을 다시 써라.
+4) ★ Closing Signature가 원고의 마지막 문장인가? ★ (v3.16.5)
+   그 문장 뒤에 다른 내용이 이어졌다면, 이어진 부분을 통째로 삭제하라.
+   그 부분은 다음 Unit에서 쓸 재료다.
+넷 중 하나라도 아니면 그 부분을 다시 써라.
 
 ──────────────────────────────────────────
 """.strip()
@@ -4030,6 +4043,33 @@ Punch 규칙: {r['punch_rule']}
 #              → final_manuscript_text()에 sanitize_manuscript() 적용
 #                (is_final_unit=True — 맨 마지막 '끝.'은 보존).
 #            · 세 항목 모두 진단·도구 제공에 그치고 본문 문장은 수정하지 않는다.
+# - v3.16.5: 개별 Unit 내보내기 헤더 누락 수정 + Unit 종료 지점 강제
+#            [배경] v3.16.4로 재생성한 UNIT 01 실측에서 두 가지가 나왔다.
+#            ① 개별 Unit DOCX에 '[CHAPTER 1] — 지윤' 헤더가 빠졌다.
+#              unit_drafts에는 제목을 뗀 본문만 저장되고 제목은
+#              chapter_titles에 따로 들어간다. 통합본은 둘을 합쳐 내보내는데
+#              개별 Unit 다운로드는 본문만 넘겨서 헤더가 사라졌다.
+#              → main.py: current_unit_export를 만들어 제목+본문을 합쳐 전달.
+#            ② UNIT 01이 설계 범위를 49% 초과했다.
+#              설계 Closing Signature "명함은 이틀 동안 그녀의 가방을
+#              떠나지 않았다. 꺼내 보지도, 버리지도 못한 채."가
+#              원고 50% 지점에 나오고 그 뒤로 49%가 더 이어졌다.
+#              이어진 부분(쇼룸·데이트앱·정체 발각)은 설계상 뒤쪽 Unit의
+#              재료라, 1화가 2화 재료를 먹어 2화가 설 자리를 잃었다.
+#              M19가 '핵심 사건'과 'Plant'는 강제했지만 ★종료 지점★을
+#              강제하지 않은 것이 원인.
+#              → BLUEPRINT_ADHERENCE_BLOCK_HEAD 5번 항목 개정.
+#                "Closing Signature는 이 Unit의 마지막 문장이다.
+#                 그 문장을 쓴 뒤에는 단 한 문단도 더 쓰지 마라."
+#                6번 항목 신설 — Punch가 지정한 상태에서 닫고 더 진행 금지.
+#                "좋은 장면이 더 떠올라도 쓰지 마라. 다음 Unit의 재료다."
+#                자가 점검에 4번 추가.
+#              → main.py check_closing_signature_position() 신설.
+#                시그니처가 원고 85% 이전에 있으면 경고.
+#                Chapter 1 병합 / Unit 생성 / 재검사 3경로에 연결.
+#                ★ 진단만 하고 본문은 자르지 않는다(규칙 7). ★
+#                실측 검증 — UNIT 01에서 50% 지점 정확히 검출,
+#                시그니처를 끝에 둔 정상 케이스는 경고 없음.
 # - v3.16.4: [긴급] 회차 초기화 버튼 StreamlitAPIException 수정
 #            v3.16.3에서 추가한 회차 초기화 UI가 앱을 중단시켰다.
 #              st.checkbox(..., key="ch1_reset_confirm")
@@ -4186,9 +4226,9 @@ Punch 규칙: {r['punch_rule']}
 #              구분해 '해야 하는 순서'와 '필요할 때 쓰는 도구'를 갈랐다.
 #            ③ Chapter 1 4단계 진행 표시 추가 (✅/⬜ 체크라인).
 #            ④ STEP 2·3·4·5·6 헤더에 실행 순서 한 줄 안내 추가.
-NOVEL_ENGINE_VERSION = "v3.16.4"
+NOVEL_ENGINE_VERSION = "v3.16.5"
 NOVEL_ENGINE_BUILD_DATE = "2026-07-27"
-NOVEL_ENGINE_VERSION_TAG = "v3.16.4 / 2026-07-27 / 회차 초기화 예외 수정 + master 서식 + 연속성 원장"
+NOVEL_ENGINE_VERSION_TAG = "v3.16.5 / 2026-07-27 / Unit 헤더 출력 + 종료 지점 강제 + master 서식"
 
 def get_novel_engine_version_info() -> str:
     """Novel Engine v3.0 메타 정보."""

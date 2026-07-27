@@ -129,6 +129,18 @@ from typing import Optional, List
 #     _SAVE_EXCLUDE_KEYS에 추가해 프로젝트 저장에는 포함하지 않는다.
 #   전수 점검 결과 나머지 위젯 key는 전부 '생성 전 초기값 대입'으로 정상.
 #
+# v3.16.5 (2026-07-27) — Unit 헤더 출력 + Unit 종료 지점 진단
+#   1. 개별 Unit 내보내기에 회차 제목이 빠지던 문제 수정.
+#      unit_drafts는 제목을 뗀 본문만, 제목은 chapter_titles에 따로 저장된다.
+#      통합본은 둘을 합쳐 내보내는데 개별 Unit은 본문만 넘겼다.
+#      current_unit_export = 제목 + 본문 으로 합쳐 txt/docx 양쪽에 전달.
+#   2. check_closing_signature_position() 신설.
+#      실제 사고 — UNIT 01 설계의 Closing Signature가 원고 50% 지점에
+#      나오고 뒤로 49%가 더 이어져, 1화가 2화 재료를 먹었다.
+#      시그니처가 원고 85% 이전에 있으면 경고한다.
+#      Chapter 1 병합 / Unit 생성 / 점검 A 재검사 3경로에 연결.
+#      ★ 진단만 하고 본문은 자르지 않는다(규칙 7). ★
+#
 # © 2026 BLUE JEANS PICTURES. All rights reserved.
 # ─────────────────────────────────────────────────────────────
 
@@ -1406,6 +1418,49 @@ def build_retry_hint(violations: dict) -> str:
 # ─────────────────────────────────────
 # Unit 요약 자동 생성
 # ─────────────────────────────────────
+def check_closing_signature_position(unit_no: int, text: str, blueprints_text: str) -> list:
+    """Closing Signature가 원고 끝에 있는지 검사한다. (v3.16.5)
+
+    실제 사고 — UNIT 01 설계의 Closing Signature
+    "명함은 이틀 동안 그녀의 가방을 떠나지 않았다. 꺼내 보지도, 버리지도 못한 채."
+    가 원고 51% 지점에 나오고, 그 뒤로 49%가 더 이어졌다. 그 뒷부분은
+    설계상 다음 Unit이 다룰 내용이라, 1화가 2화 재료를 먹어버렸다.
+
+    ★ 진단만 한다. 본문은 자르지 않는다 (작업 규칙 7). ★
+    """
+    bp = extract_unit_blueprint(blueprints_text, unit_no)
+    if not bp or not text.strip():
+        return []
+    m = re.search(
+        r"Closing\s*Signature[^:：]*[:：]\s*[\"\u201c']?(.+?)[\"\u201d']?\s*$",
+        bp, re.M | re.I,
+    )
+    if not m:
+        return []
+    sig = m.group(1).strip().strip("*").strip()
+    if len(sig) < 8:
+        return []
+
+    # 시그니처 문장의 앞 12자를 지문으로 삼아 위치를 찾는다.
+    probe = re.sub(r"\s+", "", sig)[:12]
+    flat = re.sub(r"\s+", "", text)
+    idx = flat.find(probe)
+    if idx < 0:
+        return [
+            "⚠️ 설계안의 Closing Signature가 원고에서 발견되지 않습니다 — "
+            f"\"{sig[:40]}…\" (M19)"
+        ]
+    ratio = idx / max(len(flat), 1)
+    if ratio < 0.85:
+        tail = int((1 - ratio) * 100)
+        return [
+            f"🚨 Closing Signature가 원고 {int(ratio*100)}% 지점에 있습니다 — "
+            f"그 뒤로 {tail}%가 더 이어집니다. 설계상 이 Unit은 그 문장에서 "
+            "끝나야 합니다. 뒷부분은 다음 Unit의 재료일 수 있으니 검토하세요. (M19)"
+        ]
+    return []
+
+
 def analyze_cross_unit_repetition(unit_no: int, text: str, window: int = 3) -> list:
     """직전 Unit들과 겹치는 표현을 찾아낸다. (v3.15.1)
 
@@ -3653,6 +3708,9 @@ if selected_unit == "01":
             # 품질 자동 체크
             final_text = ch_body if ch_title else merged
             qr = analyze_unit_quality(final_text)
+            _sigpos = check_closing_signature_position(1, final_text, all_blueprints_text)
+            if _sigpos:
+                qr["issues"] = list(qr.get("issues", [])) + _sigpos
             st.session_state["quality_report"] = qr
 
             # v3.15 — Chapter 1 경로에도 임계치 초과 경고를 붙인다.
@@ -3851,8 +3909,11 @@ else:
                     qr = analyze_unit_quality(check_text)
                     # v3.15.1 — 앞 Unit들과의 교차 반복 진단을 합류시킨다
                     _cross = analyze_cross_unit_repetition(unit_no, check_text)
-                    if _cross:
-                        qr["issues"] = list(qr.get("issues", [])) + _cross
+                    _sigpos = check_closing_signature_position(
+                        unit_no, check_text, all_blueprints_text
+                    )
+                    if _cross or _sigpos:
+                        qr["issues"] = list(qr.get("issues", [])) + _sigpos + _cross
                     st.session_state["quality_report"] = qr
                     # Unit 요약 자동 생성
                     summary = generate_unit_summary(unit_no, check_text)
@@ -3967,8 +4028,11 @@ if current_draft:
         if st.button("점검 A · 이 Unit 재검사", use_container_width=True, key="requalify_btn"):
             _qr = analyze_unit_quality(current_draft)
             _cross = analyze_cross_unit_repetition(int(selected_unit), current_draft)
-            if _cross:
-                _qr["issues"] = list(_qr.get("issues", [])) + _cross
+            _sigpos = check_closing_signature_position(
+                int(selected_unit), current_draft, all_blueprints_text
+            )
+            if _cross or _sigpos:
+                _qr["issues"] = list(_qr.get("issues", [])) + _sigpos + _cross
             st.session_state["quality_report"] = _qr
             set_status(f"UNIT {selected_unit} 재검사 완료.", "success")
 
@@ -4088,6 +4152,16 @@ safe_title = safe_filename(working_title)
 manuscript = final_manuscript_text(working_title)
 
 current_unit_text = st.session_state["unit_drafts"].get(selected_unit, "").strip()
+
+# v3.16.5 — 개별 Unit 내보내기에 회차 제목이 빠지던 문제 수정.
+# unit_drafts에는 제목을 뗀 본문만 저장되고, 제목은 chapter_titles에 따로
+# 들어간다. 통합본(gather_all_drafts_text)은 둘을 합쳐 내보내는데,
+# 개별 Unit 다운로드는 본문만 넘겨서 '[CHAPTER 1] — 지윤' 헤더가 사라졌다.
+_cur_ch_title = (st.session_state["chapter_titles"].get(selected_unit, "") or "").strip()
+if current_unit_text and _cur_ch_title:
+    current_unit_export = f"{_cur_ch_title}\n\n{current_unit_text}"
+else:
+    current_unit_export = current_unit_text
 current_unit_label = "UNIT_13_에필로그" if selected_unit == "13" else f"UNIT_{selected_unit}"
 
 # ── DOCX 문단 간격 (v3.16.2) ──
@@ -4114,14 +4188,14 @@ docx_bytes = (
     if manuscript.strip() else b""
 )
 
-unit_txt_bytes = export_txt(current_unit_text) if current_unit_text else b""
+unit_txt_bytes = export_txt(current_unit_export) if current_unit_export else b""
 unit_docx_bytes = (
     export_docx(
         f"{working_title or 'Novel Draft'} {current_unit_label}",
-        current_unit_text,
+        current_unit_export,
         _spacing_mode,
     )
-    if current_unit_text
+    if current_unit_export
     else b""
 )
 

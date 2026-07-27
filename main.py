@@ -119,6 +119,16 @@ from typing import Optional, List
 #      기존 '다시 쓰기'는 원고를 손보는 것이고, 이것은 새로 뽑는 것이다.
 #      비우지 않으면 옛 원고가 previous_drafts로 섞여 들어간다.
 #
+# v3.16.4 (2026-07-27) — [긴급] 회차 초기화 StreamlitAPIException 수정
+#   v3.16.3의 초기화 UI가 앱을 중단시켰다. 체크박스 key를 코드가 되돌리려 한
+#   st.session_state["ch1_reset_confirm"] = False 한 줄이 원인.
+#   Streamlit은 위젯 생성 후 그 key 값을 코드가 바꾸는 것을 금지한다.
+#   → 체크박스 폐기. 위젯이 아닌 플래그로 2단계 버튼 구현.
+#     [초기화 준비] → 경고 → [정말 비우기] / [취소]
+#     ch1_reset_armed / unit_reset_armed 를 DEFAULT_STATE에 등록,
+#     _SAVE_EXCLUDE_KEYS에 추가해 프로젝트 저장에는 포함하지 않는다.
+#   전수 점검 결과 나머지 위젯 key는 전부 '생성 전 초기값 대입'으로 정상.
+#
 # © 2026 BLUE JEANS PICTURES. All rights reserved.
 # ─────────────────────────────────────────────────────────────
 
@@ -603,6 +613,9 @@ DEFAULT_STATE = {
     "status_message": "",
     "status_type": "info",
     "status_shown": False,   # v3.15 — 상태 메시지 1회 표시 후 소거용
+    # v3.16.4 — 회차 초기화 2단계 확인 플래그 (위젯 key가 아니어야 한다)
+    "ch1_reset_armed": False,
+    "unit_reset_armed": "",
     # v3.15 M17 Continuity Ledger — Unit별 물리 상태 원장 (문자열 키)
     "continuity_ledger": {},
     # v3.16 회차 제목 재검토 결과
@@ -703,6 +716,8 @@ _SAVE_EXCLUDE_KEYS = {
     "status_message",
     "status_type",
     "status_shown",   # v3.15
+    "ch1_reset_armed",   # v3.16.4
+    "unit_reset_armed",  # v3.16.4
 }
 
 
@@ -3457,27 +3472,41 @@ if selected_unit == "01":
             "Stage A·B·C 원고와 UNIT 01 확정본, 회차 제목, 상태 원장, 요약을 모두 비웁니다. "
             "설계안(STEP 4)과 STEP 1 자료는 그대로 둡니다."
         )
-        _r1c1, _r1c2 = st.columns([1, 1])
-        with _r1c1:
-            _reset1_ok = st.checkbox("네, 1화를 비우겠습니다", key="ch1_reset_confirm")
-        with _r1c2:
-            if st.button(
-                "1화 초기화 후 다시 시작",
-                use_container_width=True,
-                disabled=not _reset1_ok,
-                key="ch1_reset_btn",
-            ):
-                for _k in ("ch1_stage_a", "ch1_stage_b", "ch1_stage_c"):
-                    st.session_state[_k] = ""
-                st.session_state["unit_drafts"]["01"] = ""
-                st.session_state["chapter_titles"]["01"] = ""
-                for _d in ("unit_summaries", "continuity_ledger", "character_tracker"):
-                    if isinstance(st.session_state.get(_d), dict):
-                        st.session_state[_d].pop("01", None)
-                st.session_state["quality_report"] = {}
-                st.session_state["ch1_reset_confirm"] = False
-                set_status("1화를 비웠습니다. 5-1 Stage A부터 다시 시작하세요.", "success")
+        # v3.16.4 — 체크박스 key를 코드에서 되돌리려다 StreamlitAPIException이
+        # 났다. Streamlit은 위젯이 생성된 뒤 그 위젯의 key 값을 코드가 바꾸는 것을
+        # 금지한다. 위젯이 아닌 자체 플래그로 2단계 확인을 구현한다.
+        if not st.session_state.get("ch1_reset_armed"):
+            if st.button("1화 초기화 준비", use_container_width=True, key="ch1_reset_arm_btn"):
+                st.session_state["ch1_reset_armed"] = True
                 st.rerun()
+        else:
+            st.warning(
+                "1화 원고가 모두 지워집니다. 되돌릴 수 없습니다. "
+                "남겨둘 원고가 있으면 먼저 STEP 6에서 저장하세요."
+            )
+            _r1c1, _r1c2 = st.columns([1, 1])
+            with _r1c1:
+                if st.button(
+                    "정말 비우고 다시 시작",
+                    type="primary",
+                    use_container_width=True,
+                    key="ch1_reset_do_btn",
+                ):
+                    for _k in ("ch1_stage_a", "ch1_stage_b", "ch1_stage_c"):
+                        st.session_state[_k] = ""
+                    st.session_state["unit_drafts"]["01"] = ""
+                    st.session_state["chapter_titles"]["01"] = ""
+                    for _d in ("unit_summaries", "continuity_ledger", "character_tracker"):
+                        if isinstance(st.session_state.get(_d), dict):
+                            st.session_state[_d].pop("01", None)
+                    st.session_state["quality_report"] = {}
+                    st.session_state["ch1_reset_armed"] = False
+                    set_status("1화를 비웠습니다. 5-1 Stage A부터 다시 시작하세요.", "success")
+                    st.rerun()
+            with _r1c2:
+                if st.button("취소", use_container_width=True, key="ch1_reset_cancel_btn"):
+                    st.session_state["ch1_reset_armed"] = False
+                    st.rerun()
 
     # v3.15.2 — 진행 표시. 버튼이 4개라 어디까지 했는지 한눈에 안 보였다.
     _done_a = bool(st.session_state.get("ch1_stage_a", "").strip())
@@ -3845,26 +3874,42 @@ else:
                 "이 Unit의 원고·제목·상태 원장·요약을 비웁니다. "
                 "비운 뒤 5-1로 새로 생성하세요. 설계안은 그대로 둡니다."
             )
-            _ru_ok = st.checkbox(
-                f"네, {selected_unit}화를 비우겠습니다", key=f"unit_reset_confirm_{selected_unit}"
-            )
-            if st.button(
-                f"{selected_unit}화 초기화",
-                use_container_width=True,
-                disabled=not _ru_ok,
-                key=f"unit_reset_btn_{selected_unit}",
-            ):
-                st.session_state["unit_drafts"][selected_unit] = ""
-                st.session_state["chapter_titles"][selected_unit] = ""
-                for _d in ("unit_summaries", "continuity_ledger", "character_tracker"):
-                    if isinstance(st.session_state.get(_d), dict):
-                        st.session_state[_d].pop(selected_unit, None)
-                st.session_state["quality_report"] = {}
-                st.session_state[f"unit_reset_confirm_{selected_unit}"] = False
-                set_status(
-                    f"{selected_unit}화를 비웠습니다. 5-1로 새로 생성하세요.", "success"
-                )
-                st.rerun()
+            # v3.16.4 — 위젯 key 되돌리기 금지. 자체 플래그로 2단계 확인.
+            _armed_key = "unit_reset_armed"
+            _armed_for = st.session_state.get(_armed_key)
+            if _armed_for != selected_unit:
+                if st.button(
+                    f"{selected_unit}화 초기화 준비",
+                    use_container_width=True,
+                    key=f"unit_reset_arm_{selected_unit}",
+                ):
+                    st.session_state[_armed_key] = selected_unit
+                    st.rerun()
+            else:
+                st.warning(f"{selected_unit}화 원고가 지워집니다. 되돌릴 수 없습니다.")
+                _uc1, _uc2 = st.columns([1, 1])
+                with _uc1:
+                    if st.button(
+                        "정말 비우기",
+                        type="primary",
+                        use_container_width=True,
+                        key=f"unit_reset_do_{selected_unit}",
+                    ):
+                        st.session_state["unit_drafts"][selected_unit] = ""
+                        st.session_state["chapter_titles"][selected_unit] = ""
+                        for _d in ("unit_summaries", "continuity_ledger", "character_tracker"):
+                            if isinstance(st.session_state.get(_d), dict):
+                                st.session_state[_d].pop(selected_unit, None)
+                        st.session_state["quality_report"] = {}
+                        st.session_state[_armed_key] = ""
+                        set_status(
+                            f"{selected_unit}화를 비웠습니다. 5-1로 새로 생성하세요.", "success"
+                        )
+                        st.rerun()
+                with _uc2:
+                    if st.button("취소", use_container_width=True, key=f"unit_reset_cancel_{selected_unit}"):
+                        st.session_state[_armed_key] = ""
+                        st.rerun()
 
         rewrite_mode = st.selectbox(
             "다시 쓰기 모드",

@@ -4030,6 +4030,23 @@ Punch 규칙: {r['punch_rule']}
 #              → final_manuscript_text()에 sanitize_manuscript() 적용
 #                (is_final_unit=True — 맨 마지막 '끝.'은 보존).
 #            · 세 항목 모두 진단·도구 제공에 그치고 본문 문장은 수정하지 않는다.
+# - v3.16.4: [긴급] 회차 초기화 버튼 StreamlitAPIException 수정
+#            v3.16.3에서 추가한 회차 초기화 UI가 앱을 중단시켰다.
+#              st.checkbox(..., key="ch1_reset_confirm")
+#              ...
+#              st.session_state["ch1_reset_confirm"] = False   ← 예외 발생
+#            Streamlit은 위젯이 생성된 뒤 코드가 그 위젯의 key 값을 바꾸는 것을
+#            금지한다. 체크박스를 되돌리려던 한 줄이 원인이었다.
+#            같은 패턴을 N화 초기화에도 써서 두 곳 모두 터졌다.
+#            → 체크박스 + 버튼 조합을 폐기하고, 위젯이 아닌 자체 플래그
+#              (ch1_reset_armed / unit_reset_armed)를 쓰는 2단계 버튼으로 교체.
+#              [초기화 준비] → 경고 표시 → [정말 비우기] / [취소]
+#              두 플래그는 DEFAULT_STATE에 등록하고 저장 대상에서는 제외한다.
+#            [전수 점검] 위젯 key와 코드 대입이 겹치는 곳을 전부 조사한 결과
+#              f_period_mode / f_period_labels / signature_food_opening /
+#              metric_watchlist_on 4건이 걸렸으나, 모두 위젯 생성 이전에
+#              대입하는 정상 패턴(초기값 설정)이라 문제없음을 확인했다.
+#              고정 key 48개 중복 없음.
 # - v3.16.3: 작가 master 서식 통일 + 연속성 원장 잘림 수정 + 1·2화 재생성
 #            [배경] v3.16.1로 생성한 UNIT 01·02 실측 검토.
 #            M19(설계안 준수)와 M20(제목 유형)은 정상 작동했다.
@@ -4169,9 +4186,9 @@ Punch 규칙: {r['punch_rule']}
 #              구분해 '해야 하는 순서'와 '필요할 때 쓰는 도구'를 갈랐다.
 #            ③ Chapter 1 4단계 진행 표시 추가 (✅/⬜ 체크라인).
 #            ④ STEP 2·3·4·5·6 헤더에 실행 순서 한 줄 안내 추가.
-NOVEL_ENGINE_VERSION = "v3.16.3"
+NOVEL_ENGINE_VERSION = "v3.16.4"
 NOVEL_ENGINE_BUILD_DATE = "2026-07-27"
-NOVEL_ENGINE_VERSION_TAG = "v3.16.3 / 2026-07-27 / master 서식 통일 + 연속성 원장 잘림 수정 + 회차 재생성"
+NOVEL_ENGINE_VERSION_TAG = "v3.16.4 / 2026-07-27 / 회차 초기화 예외 수정 + master 서식 + 연속성 원장"
 
 def get_novel_engine_version_info() -> str:
     """Novel Engine v3.0 메타 정보."""

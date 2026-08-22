@@ -295,6 +295,16 @@ BJND_THRESHOLDS = {
     "신체반응": 6,       # 손끝·심장·등골·목덜미 등 신체 반응 어휘 (M11 보강)
     "기억오류": 1,       # "~하지는 않았다" 류 감정 라벨링·기억 오류 장치 (M18)
     "회상마커": 3,       # Chapter 1 회상 진입 마커 (M12 / Stage B 회상 금지)
+    # v3.17 신규 진단 지표 — M21 AI-TELL SCANNER + M1 연속종결 보강
+    # 작가 코퍼스(시크릿퀸·감각구역) 실측으로 임계치를 산출했다.
+    "대명사과밀": 2,     # 한 서술 문단당 '그녀/그가/그의…' 3회+ 시 경고 (M21)
+    #                     실측: 두 작품 모두 문단당 2회+가 0.8%, 3회는 시크릿퀸 전체 1건.
+    "파편과밀": 0,       # 한 서술 문단이 '절반 이상 6자 이하 파편'이면 1건으로 카운트 (M21)
+    #                     실측: 정상 파편율 5%대. 문단 절반이 파편이면 AI 리듬 공식.
+    "연속종결": 8,       # '~았/었/였다' 종결이 한 문단에서 8회 초과 연속(=9연속+) 시 경고 (M1 보강)
+    #                     실측: 두 작품 모두 최대 연속이 정확히 8. 작가는 8까지 의도적으로 쓴다.
+    #                     실측 상한(8)을 정상으로 보고 그 초과(9+)만 잡아 오탐 0 달성.
+    #                     (초기값 5는 작가 원고 4/24 오탐 → 실측 반영해 8로 상향)
 }
 
 AUTO_REGEN_MAX_RETRIES = 2  # v3.15 — 1회로는 임계치 초과가 통과되는 사례가 있어 2회로 상향
@@ -317,6 +327,22 @@ FLASHBACK_MARKER_RE = re.compile(
     r"(지난(?:달|주|해|번)에도|그때도|어릴 때|어린 시절|처음 만났을 때|"
     r"몇 년 전|넉 달 전|반년 전|작년|재작년|그 무렵|예전에|한때)"
 )
+
+# ④ v3.17 M21 AI-TELL — 3인칭 대명사 (영어 he/she 직역 번역투).
+#    실측 배경: 작가 서술은 대명사 대신 인명·직함을 쓴다.
+#    시크릿퀸 문단당 평균 0.12회, 감각구역 0.08회. 2회+ 문단은 둘 다 0.8%.
+#    AI 초안은 한 문단에 "그녀의 손목을… 그의 손아귀는… 그가 당겼다"처럼 몰린다.
+#    ※ 대사 안('~'/"~")은 제외하고 서술만 센다. 대사에서는 대명사가 자연스럽다.
+PRONOUN_3RD_RE = re.compile(r"(그녀|그가|그의|그를|그는|그에게)")
+
+# ⑤ v3.17 M21 AI-TELL — 서술 종결 '~았/었/였다' 판별 (연속종결 측정용).
+#    문장 끝(구두점·따옴표 앞)의 단순과거 종결만 잡는다.
+PAST_ENDING_RE = re.compile(r"(?:았|었|였)다$")
+
+# 대사 문단 판별 — 큰따옴표/작은따옴표/대시로 시작하면 대사 주도 문단.
+_DIALOGUE_LEAD_RE = re.compile(r'^\s*[\u201c\u201d"\u2018\u2019\'\-\u2014]')
+# 문장 안의 따옴표 인용 구간 — 대명사 카운트에서 제외하기 위해 제거용.
+_QUOTE_SPAN_RE = re.compile(r'[\u201c"][^\u201d"]*[\u201d"]|[\u2018\'][^\u2019\']*[\u2019\']')
 
 # v3.12 M15 / v3.13 M15-B — 계량 수치 감지 정규식
 # 본문 검사(analyze_unit_quality)와 자료 스캔(scan_metric_expressions)의
@@ -1206,8 +1232,95 @@ def analyze_unit_quality(text: str) -> dict:
             "severity": "low",
         }
 
+    # ══════════════════════════════════════════════════════
+    # v3.17 M21 AI-TELL SCANNER — "AI가 썼네" 신호 진단 (진단 전용)
+    # ══════════════════════════════════════════════════════
+    # 작가 코퍼스(시크릿퀸·감각구역) 실측 기반. 세 지표 모두 severity="medium"
+    # 이하로 두어 자동 재생성은 트리거하지 않는다. 판단은 작가에게 맡긴다. (작업 규칙 7)
+    #
+    # 문단 단위로 본다. 서술 문단만 세고, 대사 주도 문단은 건너뛴다.
+    _paras = [p for p in text.split("\n") if p.strip()]
+    _narr_paras = [p for p in _paras if not _DIALOGUE_LEAD_RE.match(p)]
+
+    # ① 대명사 과밀 (M21) — 서술 문단당 3회+ (임계 2 초과)
+    pron_over_paras = []   # (문단 앞부분, 대명사 수)
+    pron_grand_total = 0
+    for p in _narr_paras:
+        body = _QUOTE_SPAN_RE.sub("", p)   # 문단 안 인용 대사 제거
+        c = len(PRONOUN_3RD_RE.findall(body))
+        pron_grand_total += c
+        if c > BJND_THRESHOLDS["대명사과밀"]:
+            pron_over_paras.append((p.strip()[:22], c))
+    stats["3인칭 대명사(서술)"] = pron_grand_total
+    if pron_over_paras:
+        worst = max(pron_over_paras, key=lambda x: x[1])
+        issues.append(
+            f"⚠️ 3인칭 대명사 과밀 — {len(pron_over_paras)}개 문단에서 "
+            f"'그녀/그가/그의'가 문단당 3회 이상 (최다 {worst[1]}회: \"{worst[0]}…\"). "
+            f"작가 문체는 대명사 대신 인명·직함을 씁니다. 이 몰림이 가장 강한 AI 신호입니다."
+        )
+        violations["대명사과밀"] = {
+            "count": len(pron_over_paras),
+            "threshold": 0,
+            "severity": "medium",
+        }
+
+    # ② 파편 문장 과밀 (M21) — 한 문단의 절반 이상이 6자 이하 파편
+    frag_over_paras = []
+    for p in _narr_paras:
+        body = _QUOTE_SPAN_RE.sub("", p).strip()
+        sents = [s.strip() for s in re.split(r"(?<=[.!?])\s+", body) if s.strip()]
+        if len(sents) < 4:          # 문장 3개 이하 짧은 문단은 판단 보류(오탐 방지)
+            continue
+        frag = sum(1 for s in sents if len(s.replace(" ", "")) <= 6)
+        if frag >= len(sents) / 2:  # 절반 이상이 파편
+            frag_over_paras.append((p.strip()[:22], frag, len(sents)))
+    stats["파편 과밀 문단"] = len(frag_over_paras)
+    if frag_over_paras:
+        w = frag_over_paras[0]
+        issues.append(
+            f"⚠️ 파편 문장 과밀 — {len(frag_over_paras)}개 문단이 절반 이상 짧은 파편 "
+            f"(예: \"{w[0]}…\" {w[2]}문장 중 {w[1]}개 파편). "
+            f"파편 리듬 자체는 좋지만, 문단 전체가 파편 공식이면 기계적으로 읽힙니다."
+        )
+        violations["파편과밀"] = {
+            "count": len(frag_over_paras),
+            "threshold": BJND_THRESHOLDS["파편과밀"],
+            "severity": "low",
+        }
+
+    # ③ 연속 종결 '~았/었/였다' (M1 보강) — 한 문단에서 6연속+
+    seq_over_paras = []
+    for p in _narr_paras:
+        body = _QUOTE_SPAN_RE.sub("", p).strip()
+        sents = [s.strip() for s in re.split(r"(?<=[.!?])\s+", body) if s.strip()]
+        cur = maxrun = 0
+        for s in sents:
+            tail = s.rstrip('.!?"\u201d\'\u2019 ')
+            if PAST_ENDING_RE.search(tail):
+                cur += 1
+                maxrun = max(maxrun, cur)
+            else:
+                cur = 0
+        if maxrun > BJND_THRESHOLDS["연속종결"]:
+            seq_over_paras.append((p.strip()[:22], maxrun))
+    stats["최대 연속 '~었다'"] = max((m for _, m in seq_over_paras), default=0)
+    if seq_over_paras:
+        worst = max(seq_over_paras, key=lambda x: x[1])
+        issues.append(
+            f"⚠️ '~았/었/였다' 종결 {worst[1]}연속 — "
+            f"(\"{worst[0]}…\") 종결어미가 단조롭게 반복됩니다. "
+            f"중간에 명사 종결·현재 감각·짧은 대사로 리듬을 끊으세요. (M1 보강)"
+        )
+        violations["연속종결"] = {
+            "count": worst[1],
+            "threshold": BJND_THRESHOLDS["연속종결"],
+            "severity": "medium",
+        }
+
     # v3.0 신규: 자동 재생성 트리거 판정
     # severity가 "critical" 또는 "high"인 violation이 있으면 재생성 대상
+    # ★ M21 지표는 medium/low라 재생성을 트리거하지 않는다 — 진단만 한다. ★
     should_regenerate = any(
         v.get("severity") in ("critical", "high")
         for v in violations.values()

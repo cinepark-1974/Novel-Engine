@@ -2490,7 +2490,7 @@ def generate_or_expand_unit(unit_no: int, prompt: str) -> str:
 # ─────────────────────────────────────
 # HEADER
 # ─────────────────────────────────────
-render_header(APP_TITLE, note=[f"A {APP_FORMAT} ENGINE", APP_FORMAT_DESC])
+render_header(APP_TITLE, tagline="COMMERCIAL NOVEL · E-BOOK", note=APP_FORMAT_DESC)
 
 st.markdown(
     """

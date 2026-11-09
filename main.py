@@ -146,6 +146,7 @@ from typing import Optional, List
 
 import streamlit as st
 
+from bj_header import render_header  # 공통 헤더 (Writer Engine 기준)
 try:
     import anthropic
 except ImportError:
@@ -2489,18 +2490,7 @@ def generate_or_expand_unit(unit_no: int, prompt: str) -> str:
 # ─────────────────────────────────────
 # HEADER
 # ─────────────────────────────────────
-st.markdown(
-    f"""
-<div class="header-wrap">
-    <div class="header">BLUE JEANS PICTURES</div>
-    <div class="brand-title">{APP_TITLE}</div>
-    <div class="tagline">A <span>{APP_FORMAT}</span> ENGINE</div>
-    <div class="tagline-desc">{APP_FORMAT_DESC}</div>
-    <div class="sub">YOUNG · VINTAGE · FREE · INNOVATIVE</div>
-</div>
-""",
-    unsafe_allow_html=True,
-)
+render_header(APP_TITLE, note=[f"A {APP_FORMAT} ENGINE", APP_FORMAT_DESC])
 
 st.markdown(
     """
